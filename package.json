@@ -1,0 +1,61 @@
+{
+  "name": "demowright",
+  "version": "0.1.0",
+  "description": "Record polished product demo videos from a script. Playwright drives the browser, the overlay (captions, smooth cursor, auto-zoom, end card) is baked into the recording. A demo that lives in your repo and re-renders in CI — so it never goes stale.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Matteo Perino <matte97.p@gmail.com> (https://github.com/matte97p)",
+  "contributors": [
+    "Matteo Perino <matte97.p@gmail.com> (https://github.com/matte97p)",
+    "GeoSuite (https://trygeosuite.it)"
+  ],
+  "homepage": "https://github.com/matte97p/demowright#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/matte97p/demowright.git"
+  },
+  "bugs": {
+    "url": "https://github.com/matte97p/demowright/issues"
+  },
+  "keywords": [
+    "demo",
+    "demo-video",
+    "screencast",
+    "screen-recording",
+    "product-demo",
+    "playwright",
+    "video",
+    "ffmpeg",
+    "marketing",
+    "devtools",
+    "ci"
+  ],
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "bin": {
+    "demowright": "bin/cli.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "examples",
+    "assets",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "lint": "node --check src/index.js && node --check src/runner.js && node --check src/overlay.js && node --check src/steps.js && node --check src/render.js && node --check src/scaffold.js && node --check bin/cli.js",
+    "test": "node --check examples/local-demo.config.js && echo \"ok: example config parses (no unit tests yet)\"",
+    "demo": "node bin/cli.js run examples/local-demo.config.js -o output/local-demo.mp4"
+  },
+  "dependencies": {
+    "ffmpeg-static": "^5.2.0",
+    "playwright": "^1.45.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

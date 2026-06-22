@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Demo App</title>
+    <style>
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; }
+      body {
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        background: #0b0b0e;
+        color: #e7e7ea;
+        display: flex;
+        height: 100vh;
+        overflow: hidden;
+      }
+      .sidebar {
+        width: 240px;
+        flex: 0 0 240px;
+        border-right: 1px solid rgba(255, 255, 255, 0.08);
+        background: rgba(255, 255, 255, 0.02);
+        padding: 16px 10px;
+        overflow-y: auto;
+      }
+      .brand { font-weight: 800; font-size: 18px; padding: 6px 10px 14px; letter-spacing: -0.3px; }
+      .brand span { color: #e91e63; }
+      .nav-group { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: #75757e; padding: 12px 10px 6px; }
+      .nav-item {
+        display: flex; align-items: center; gap: 10px;
+        padding: 8px 10px; border-radius: 8px;
+        font-size: 13px; color: #b9b9c2; cursor: pointer;
+      }
+      .nav-item:hover { background: rgba(255, 255, 255, 0.05); color: #fff; }
+      .nav-item .dot { width: 6px; height: 6px; border-radius: 50%; background: #44444c; }
+      .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+      .topbar { padding: 16px 28px; border-bottom: 1px solid rgba(255, 255, 255, 0.06); font-weight: 600; }
+      .stage { flex: 1; display: flex; align-items: center; justify-content: center; padding: 28px; }
+      .assistant {
+        width: 100%; max-width: 620px;
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 18px; padding: 22px;
+      }
+      .assistant h2 { margin: 0 0 4px; font-size: 20px; }
+      .assistant p.sub { margin: 0 0 18px; color: #8a8a93; font-size: 13px; }
+      .composer { display: flex; gap: 10px; }
+      #q {
+        flex: 1; resize: none; height: 46px;
+        background: #141418; color: #fff;
+        border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 12px;
+        padding: 12px 14px; font-size: 15px; font-family: inherit;
+      }
+      #q:focus { outline: none; border-color: #e91e63; }
+      #ask {
+        border: none; border-radius: 12px; padding: 0 20px;
+        background: #e91e63; color: #fff; font-weight: 700; font-size: 14px; cursor: pointer;
+      }
+      #result { margin-top: 18px; min-height: 10px; }
+      .think { color: #8a8a93; font-size: 13px; display: flex; gap: 8px; align-items: center; }
+      .tool {
+        display: inline-flex; align-items: center; gap: 8px;
+        background: rgba(233, 30, 99, 0.12); color: #ff7aa8;
+        border: 1px solid rgba(233, 30, 99, 0.3);
+        border-radius: 999px; padding: 5px 12px; font-size: 12px; font-weight: 600; margin: 6px 0;
+      }
+      .answer { font-size: 15px; line-height: 1.55; }
+      .cursor::after { content: "▍"; color: #e91e63; animation: blink 1s steps(2) infinite; }
+      @keyframes blink { 50% { opacity: 0; } }
+    </style>
+  </head>
+  <body>
+    <aside class="sidebar">
+      <div class="brand">Demo<span>App</span></div>
+      <div class="nav-group">Workspace</div>
+      <div class="nav-item"><span class="dot"></span>Overview</div>
+      <div class="nav-item"><span class="dot"></span>Store &amp; Catalog</div>
+      <div class="nav-group">Insights</div>
+      <div class="nav-item"><span class="dot"></span>Analytics</div>
+      <div class="nav-item"><span class="dot"></span>Categories</div>
+      <div class="nav-item"><span class="dot"></span>Products</div>
+      <div class="nav-item"><span class="dot"></span>Competitors</div>
+      <div class="nav-item"><span class="dot"></span>Citations</div>
+      <div class="nav-group">Tools</div>
+      <div class="nav-item"><span class="dot"></span>Brief Generator</div>
+      <div class="nav-item"><span class="dot"></span>Citation Strategy</div>
+      <div class="nav-item"><span class="dot"></span>Audience Intent</div>
+      <div class="nav-item"><span class="dot"></span>Content Planner</div>
+      <div class="nav-item"><span class="dot"></span>Product Optimizer</div>
+      <div class="nav-group">Account</div>
+      <div class="nav-item"><span class="dot"></span>Audits</div>
+      <div class="nav-item"><span class="dot"></span>Audit History</div>
+      <div class="nav-item"><span class="dot"></span>Reports</div>
+      <div class="nav-item"><span class="dot"></span>Settings</div>
+      <div class="nav-item"><span class="dot"></span>Billing</div>
+    </aside>
+
+    <div class="main">
+      <div class="topbar">Assistant</div>
+      <div class="stage">
+        <div class="assistant">
+          <h2>Ask the assistant</h2>
+          <p class="sub">No more hunting through the sidebar — just say what you need.</p>
+          <div class="composer">
+            <textarea id="q" placeholder="Type a question…"></textarea>
+            <button id="ask">Ask</button>
+          </div>
+          <div id="result"></div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const result = document.getElementById('result')
+      document.getElementById('ask').addEventListener('click', () => {
+        result.innerHTML = '<div class="think">Thinking…</div>'
+        setTimeout(() => {
+          result.innerHTML = '<div class="tool">⚙ running tool: brand-audit</div>'
+        }, 900)
+        setTimeout(() => {
+          result.innerHTML =
+            '<div class="tool">⚙ brand-audit · done</div>' +
+            '<div class="answer cursor" id="ans"></div>'
+          const ans = document.getElementById('ans')
+          const text =
+            'ChatGPT mentions your brand in 3 of 10 comparison prompts, ' +
+            'usually behind two competitors. Strongest on price, weakest on reviews.'
+          let i = 0
+          const tick = setInterval(() => {
+            ans.textContent = text.slice(0, (i += 2))
+            if (i >= text.length) {
+              clearInterval(tick)
+              ans.classList.remove('cursor')
+              ans.classList.add('done')
+            }
+          }, 28)
+        }, 1900)
+      })
+    </script>
+  </body>
+</html>

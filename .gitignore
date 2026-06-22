@@ -1,0 +1,18 @@
+node_modules/
+output/
+.demowright-tmp/
+*.webm
+*.log
+.DS_Store
+
+# Internal GeoSuite demo scripts — kept locally, never published.
+# They drive the private app with real credentials/selectors. The two
+# sanitized real-world examples (geosuite-howitworks, geosuite-workspace-audit)
+# are intentionally NOT listed here and are committed.
+examples/geosuite.config.js
+examples/geosuite-backlog.config.js
+examples/geosuite-onboarding-geo.config.js
+examples/geosuite-signup.config.js
+examples/geosuite-workspace.config.js
+examples/geosuite-workspace-agency.config.js
+examples/geosuite-workspace-brand.config.js
