@@ -1,0 +1,17 @@
+# Internal GeoSuite demo scripts — NEVER publish (real credentials/selectors).
+# npm ignores .gitignore when a `files` whitelist is present, so these must be
+# listed here explicitly too.
+examples/geosuite.config.js
+examples/geosuite-backlog.config.js
+examples/geosuite-onboarding-geo.config.js
+examples/geosuite-signup.config.js
+examples/geosuite-workspace.config.js
+examples/geosuite-workspace-agency.config.js
+examples/geosuite-workspace-brand.config.js
+
+# build / recording artifacts
+output/
+.demowright-tmp/
+*.webm
+*.log
+.DS_Store

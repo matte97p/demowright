@@ -1,6 +1,9 @@
 {
-  "name": "demowright",
+  "name": "@matte97p/demowright",
   "version": "0.1.0",
+  "publishConfig": {
+    "access": "public"
+  },
   "description": "Record polished product demo videos from a script. Playwright drives the browser, the overlay (captions, smooth cursor, auto-zoom, end card) is baked into the recording. A demo that lives in your repo and re-renders in CI — so it never goes stale.",
   "type": "module",
   "license": "MIT",
@@ -40,7 +43,10 @@
   "files": [
     "bin",
     "src",
-    "examples",
+    "examples/local-demo.config.js",
+    "examples/geosuite-howitworks.config.js",
+    "examples/geosuite-workspace-audit.config.js",
+    "examples/site",
     "assets",
     "README.md",
     "LICENSE",

@@ -5,7 +5,7 @@ Product demo videos rot the moment you touch the UI. You record a beautiful 40-s
 So I wrote this: a demo video you describe as a **script that lives in your repo**. Playwright drives the browser, and the polish — captions, a smooth synthetic cursor, auto-zoom on what matters, an end card — is painted straight into the recording. No external editor, no SaaS, no "click here to start your trial". When the UI changes, you re-run it in CI and the video is current again.
 
 ```bash
-npm install --save-dev demowright
+npm install --save-dev @matte97p/demowright
 npx playwright install chromium   # the browser it drives
 npx demowright init               # writes a starter demowright.config.js
 npx demowright run demowright.config.js -o output/demo.mp4
