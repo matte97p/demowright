@@ -1,11 +1,17 @@
 name: Publish to npm
 
-# Runs when a tag matching `v*` is pushed (e.g. v0.2.0).
-# Re-uses the same lint+test gate as CI before publishing, so a broken
-# release never reaches the registry.
+# Publishes to npm, gated by lint+test. Three ways in, all safe (npm never sees
+# a duplicate version):
+#   1. Push to `main`, version bumped manually — releases that version.
+#   2. Push to `main`, version NOT bumped — the auto-bump step packs the package
+#      and diffs it against what's live on npm. If a *shipped* file changed
+#      (README, src/, …) it auto patch-bumps, commits `[skip ci]`, and publishes.
+#      CI-only pushes pack identically, so nothing ships.
+#   3. Push a `v*` tag — the classic explicit release (tag must match version).
 
 on:
   push:
+    branches: [main]
     tags:
       - 'v*'
 
@@ -14,7 +20,7 @@ jobs:
     name: Build, test, publish
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write   # the auto-bump step commits the version bump back to main
       id-token: write
     steps:
       - name: Checkout
@@ -36,6 +42,7 @@ jobs:
         run: npm test
 
       - name: Verify tag matches package.json version
+        if: startsWith(github.ref, 'refs/tags/')
         run: |
           PKG_VERSION="$(node -p "require('./package.json').version")"
           TAG_VERSION="${GITHUB_REF_NAME#v}"
@@ -44,7 +51,64 @@ jobs:
             exit 1
           fi
 
+      - name: Auto patch-bump if the npm tarball would change
+        # Only on a plain push to main (tags are explicit releases) and only on
+        # the canonical repo (forks lack write + NPM_TOKEN).
+        if: github.ref == 'refs/heads/main' && github.repository_owner == 'matte97p'
+        run: |
+          set -euo pipefail
+          PKG_NAME="$(node -p "require('./package.json').name")"
+          LOCAL="$(node -p "require('./package.json').version")"
+          PUBLISHED="$(npm view "$PKG_NAME" version 2>/dev/null || true)"
+
+          # First release ever, or version already bumped ahead of npm — let the
+          # version-guard step below publish it; nothing to auto-bump.
+          if [ -z "$PUBLISHED" ] || [ "$LOCAL" != "$PUBLISHED" ]; then
+            echo "No auto-bump needed (local=$LOCAL, published=${PUBLISHED:-none})."
+            exit 0
+          fi
+
+          # Same version live on npm: republish only if the packed tarball
+          # actually differs. Pack local + the published version, then diff.
+          work="$(mktemp -d)"; mkdir -p "$work/local" "$work/pub"
+          npm pack --silent --pack-destination "$work/local" >/dev/null
+          npm pack --silent --pack-destination "$work/pub" "$PKG_NAME@$PUBLISHED" >/dev/null
+          tar -xzf "$work"/local/*.tgz -C "$work/local"
+          tar -xzf "$work"/pub/*.tgz   -C "$work/pub"
+
+          # npm injects `gitHead` into the published package.json; re-serialize
+          # both (minus gitHead) so neither that nor formatting reads as a change.
+          for d in "$work/local/package" "$work/pub/package"; do
+            node -e 'const f=process.argv[1]+"/package.json";const j=require(f);delete j.gitHead;require("fs").writeFileSync(f,JSON.stringify(j,null,2)+"\n")' "$d"
+          done
+
+          if diff -r "$work/pub/package" "$work/local/package" >/dev/null 2>&1; then
+            echo "Packed tarball identical to $PKG_NAME@$PUBLISHED — nothing to publish."
+            exit 0
+          fi
+
+          echo "Shipped files changed since $PKG_NAME@$PUBLISHED — auto patch-bumping."
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          NEW="$(npm version patch --no-git-tag-version)"   # edits package.json, prints vX.Y.Z
+          git commit -aqm "chore(release): ${NEW} — auto patch-bump (shipped files changed) [skip ci]"
+          git push origin HEAD:main
+          echo "Bumped to ${NEW}; the publish step will push it to npm."
+
+      - name: Is this version already on npm?
+        id: ver
+        run: |
+          PKG_NAME="$(node -p "require('./package.json').name")"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if npm view "$PKG_NAME@$PKG_VERSION" version >/dev/null 2>&1; then
+            echo "::notice::$PKG_NAME@$PKG_VERSION is already published — skipping."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish
+        if: steps.ver.outputs.publish == 'true'
         run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
