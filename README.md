@@ -1,5 +1,15 @@
 # demowright
 
+[![npm](https://img.shields.io/npm/v/@matte97p/demowright.svg)](https://www.npmjs.com/package/@matte97p/demowright)
+[![npm downloads](https://img.shields.io/npm/dm/@matte97p/demowright.svg)](https://www.npmjs.com/package/@matte97p/demowright)
+[![GitHub stars](https://img.shields.io/github/stars/matte97p/demowright?style=flat&logo=github)](https://github.com/matte97p/demowright/stargazers)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%E2%89%A520-blue)](https://nodejs.org/)
+
+<p align="center"><img src="assets/demo.gif" alt="demowright recording a demo — captions, synthetic cursor and auto-zoom baked in" width="640"></p>
+
+> ☝️ This GIF was rendered by demowright itself, from the bundled [`examples/local-demo.config.js`](examples/local-demo.config.js). Change the UI, re-run, and it's current again.
+
 Product demo videos rot the moment you touch the UI. You record a beautiful 40-second walkthrough, ship a redesign two weeks later, and now the video is a lie — but re-recording it by hand is annoying enough that nobody does it.
 
 So I wrote this: a demo video you describe as a **script that lives in your repo**. Playwright drives the browser, and the polish — captions, a smooth synthetic cursor, auto-zoom on what matters, an end card — is painted straight into the recording. No external editor, no SaaS, no "click here to start your trial". When the UI changes, you re-run it in CI and the video is current again.
@@ -110,3 +120,15 @@ The overlay attaches itself to `<html>` rather than `<body>`, so the zoom transf
 ## License
 
 MIT © Matteo Perino
+
+## Related tools
+
+Part of my open-source toolkit — [github.com/matte97p](https://github.com/matte97p):
+
+- [rlsgrid](https://github.com/matte97p/rlsgrid) — catch cross-tenant Row-Level Security leaks in Postgres/Supabase
+- [pentest-framework](https://github.com/matte97p/pentest-framework) — low-noise pentest orchestration, normalized to one schema and rendered to a PDF
+- [GeoSuite CLIs](https://github.com/TryGeoSuite) — zero-dep Generative Engine Optimization toolkit
+
+---
+
+⭐ If demowright saved you a re-recording, [give it a star](https://github.com/matte97p/demowright) — it helps other people find it.
