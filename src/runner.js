@@ -223,6 +223,7 @@ export async function runDemo(demo, opts = {}) {
 
   const log = opts.onStep || (() => {})
   const timelapses = [] // { start, end, factor } in seconds — dead waits to speed up
+  const narration = [] // { text, atSec } — voiceover lines, placed at step start
   let video
 
   try {
@@ -234,6 +235,18 @@ export async function runDemo(demo, opts = {}) {
     for (let i = 0; i < demo.steps.length; i++) {
       const step = demo.steps[i]
       log(i, step)
+      // Narration is anchored to the moment the step begins (a caption is voiced
+      // as it appears). `say` wins; with voice.fromCaptions a caption's own text
+      // is spoken when it has no explicit `say`.
+      if (demo.voice) {
+        const line =
+          step.say != null
+            ? step.say
+            : step.type === 'caption' && demo.voice.fromCaptions
+              ? step.text
+              : null
+        if (line) narration.push({ text: String(line), atSec: (Date.now() - recordStart) / 1000 })
+      }
       const exec = EXECUTORS[step.type]
       // A `wait` may be marked `timelapse: N` to speed that recorded span up N×
       // in the final video (e.g. waiting out a multi-minute audit).
@@ -258,5 +271,5 @@ export async function runDemo(demo, opts = {}) {
   // Only reached when the step loop completed without throwing.
   if (!video) throw new Error('[demowright] no video was recorded')
   const rawVideoPath = await video.path()
-  return { rawVideoPath, workDir, timelapses }
+  return { rawVideoPath, workDir, timelapses, narration }
 }

@@ -34,8 +34,12 @@
     "ci"
   ],
   "main": "src/index.js",
+  "types": "./index.d.ts",
   "exports": {
-    ".": "./src/index.js"
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./src/index.js"
+    }
   },
   "bin": {
     "demowright": "bin/cli.js"
@@ -43,6 +47,7 @@
   "files": [
     "bin",
     "src",
+    "index.d.ts",
     "examples/local-demo.config.js",
     "examples/geosuite-howitworks.config.js",
     "examples/geosuite-workspace-audit.config.js",
@@ -53,8 +58,8 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    "lint": "node --check src/index.js && node --check src/runner.js && node --check src/overlay.js && node --check src/steps.js && node --check src/render.js && node --check src/scaffold.js && node --check bin/cli.js",
-    "test": "node --check examples/local-demo.config.js && echo \"ok: example config parses (no unit tests yet)\"",
+    "lint": "node --check src/index.js && node --check src/runner.js && node --check src/overlay.js && node --check src/steps.js && node --check src/render.js && node --check src/scaffold.js && node --check src/voice.js && node --check bin/cli.js && node --check examples/local-demo.config.js",
+    "test": "node --test",
     "demo": "node bin/cli.js run examples/local-demo.config.js -o output/local-demo.mp4"
   },
   "dependencies": {
