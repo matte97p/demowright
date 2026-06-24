@@ -17,10 +17,25 @@ Options for "run":
   -f, --format <list>   comma list: landscape,square,vertical (default from config)
   -m, --music <file>    background music track (overrides config)
       --keep-raw        keep the intermediate .webm and work dir
+      --dry-run         validate the config and print the planned timeline; record nothing
 `
 
 function fmt(ms) {
   return (ms / 1000).toFixed(1) + 's'
+}
+
+/** Print the validated step timeline without launching a browser. */
+function printPlan(rawDemo) {
+  const d = normalizeDemo(rawDemo)
+  console.log('plan "' + d.name + '"  ' + d.steps.length + ' steps, ~' + fmt(estimateDurationMs(d)))
+  console.log('  url ' + d.url + '   ' + d.viewport.width + 'x' + d.viewport.height + '   formats ' + d.formats.join(','))
+  if (d.voice) console.log('  voice ' + (typeof d.voice === 'function' ? 'custom fn' : d.voice.provider || 'custom'))
+  const narrates = (s) => s.say != null || (d.voice && d.voice.fromCaptions && s.type === 'caption')
+  d.steps.forEach((s, i) => {
+    const detail = narrates(s) ? '🔊 ' : ''
+    const what = s.text != null ? JSON.stringify(s.text) : s.selector || s.url || s.key || ''
+    console.log('  ' + String(i + 1).padStart(3) + '  ' + s.type.padEnd(12) + ' ' + detail + what)
+  })
 }
 
 async function loadConfig(configPath) {
@@ -41,6 +56,7 @@ async function main() {
       format: { type: 'string', short: 'f' },
       music: { type: 'string', short: 'm' },
       'keep-raw': { type: 'boolean', default: false },
+      'dry-run': { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h', default: false },
       version: { type: 'boolean', default: false },
     },
@@ -76,6 +92,11 @@ async function main() {
     if (!configPath) throw new Error('usage: demowright run <config.js>')
     const rawDemo = await loadConfig(configPath)
 
+    if (values['dry-run']) {
+      printPlan(rawDemo)
+      return
+    }
+
     const formats = values.format ? values.format.split(',').map((s) => s.trim()).filter(Boolean) : null
     const est = estimateDurationMs(normalizeDemo(rawDemo))
     console.log('▶ recording "' + (rawDemo.name || 'demo') + '" (~' + fmt(est) + ')')
@@ -86,6 +107,7 @@ async function main() {
       music: values.music,
       keepRaw: values['keep-raw'],
       onAuth: () => process.stdout.write('  · logging in…\n'),
+      onVoice: (n) => process.stdout.write('  · narrating ' + n + ' line(s)…\n'),
       onStep: (i, step) => process.stdout.write('  · ' + String(i + 1).padStart(2) + ' ' + step.type + '\n'),
     })
 

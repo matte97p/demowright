@@ -16,3 +16,4 @@ examples/geosuite-signup.config.js
 examples/geosuite-workspace.config.js
 examples/geosuite-workspace-agency.config.js
 examples/geosuite-workspace-brand.config.js
+/geo-demo.config.js

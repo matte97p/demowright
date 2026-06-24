@@ -95,6 +95,9 @@ export function normalizeDemo(demo) {
     // seeding state that must exist at boot, e.g. dismissing a first-run tour.
     init: typeof demo.init === 'string' ? demo.init : null,
     auth: normalizeAuth(demo.auth),
+    // Optional voiceover. When set, steps carrying `say` (and, with
+    // `fromCaptions`, every caption) are narrated. See src/voice.js.
+    voice: normalizeVoice(demo.voice),
     steps,
   }
 }
@@ -127,6 +130,21 @@ function normalizeAuth(auth) {
     // (e.g. dismiss a first-run tour) — so the recording starts on a clean page.
     after: Array.isArray(auth.after) ? auth.after : [],
   }
+}
+
+/**
+ * Optional voiceover config. Validated but not deeply inspected — the synth
+ * function/provider is resolved at render time (src/voice.js). May be a config
+ * object ({ provider } or { synthesize }) or a bare `(text) => bytes` function.
+ */
+function normalizeVoice(voice) {
+  if (!voice) return null
+  if (typeof voice === 'function') return voice
+  if (typeof voice !== 'object') fail('"voice" must be an object or a function')
+  if (typeof voice.synthesize !== 'function' && !voice.provider) {
+    fail('"voice" needs a "provider" (openai|elevenlabs) or a "synthesize" function')
+  }
+  return voice
 }
 
 /** Identity helper — gives editors a hook for autocompletion on demo configs. */

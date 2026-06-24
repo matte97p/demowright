@@ -80,10 +80,13 @@ demowright run <config.js> [options]
   -f, --format <list>   landscape,square,vertical  (overrides config)
   -m, --music <file>    background music track
       --keep-raw        keep the intermediate .webm
+      --dry-run         validate the config and print the planned timeline; record nothing
 
 demowright init [dir]   write a starter config
 demowright --version
 ```
+
+`--dry-run` is also a quick config validator: it normalizes the demo (throwing on the first problem), then prints the step timeline, the estimated length, and which lines will be narrated — without launching a browser.
 
 ## As a library
 
@@ -97,6 +100,8 @@ const { outputs } = await recordDemo(demo, {
 })
 ```
 
+TypeScript types ship with the package, so `defineDemo`, the step shapes, and `recordDemo` autocomplete in your editor.
+
 ## Social formats
 
 One capture, three crops — so you don't record three times:
@@ -104,6 +109,30 @@ One capture, three crops — so you don't record three times:
 - `landscape` — 1280×720, for the site / YouTube / X
 - `square` — 1080×1080, center-cropped, for the LinkedIn / Instagram feed
 - `vertical` — 1080×1920, the landscape centered over a blurred fill, for Reels / Shorts
+
+## Voiceover (optional)
+
+Off by default. Add a `voice` block and a `say` line on the steps you want narrated — demowright synthesizes each line, drops it at the moment that step runs, and ducks the music underneath it (with a fade in/out on the track).
+
+```js
+export default defineDemo({
+  url: 'http://localhost:3000',
+  music: './assets/track.mp3',
+  voice: { provider: 'openai', voice: 'alloy' }, // or { provider: 'elevenlabs', voice: '<id>' }
+  steps: [
+    { type: 'caption', text: 'Too many items in the sidebar.', say: 'The sidebar is doing too much.' },
+    { type: 'click', selector: '#ask' },
+    { type: 'caption', text: 'Or: just ask.', say: 'So instead, you just ask.' },
+  ],
+})
+```
+
+- `say` is the spoken line for a step — it can differ from the on-screen `caption` (captions read well short; narration reads well as a full sentence).
+- `voice.fromCaptions: true` narrates each caption's own `text` when it has no explicit `say`.
+- Built-in providers: `openai` (key from `OPENAI_API_KEY`) and `elevenlabs` (`ELEVENLABS_API_KEY`). Keys are read from the environment **by name**, never from the config — set `apiKeyEnv` to point at a different variable.
+- Bring your own: `voice: async (text) => Buffer` — wire up any TTS, including a local engine.
+
+Identical lines are synthesized once and reused.
 
 ## How it works
 
