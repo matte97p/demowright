@@ -1,0 +1,32 @@
+# NOTE: Docker uses the .dockerignore at the BUILD CONTEXT ROOT, not next to the
+# Dockerfile. Because this image's context is the REPO ROOT (the Dockerfile
+# copies the root package.json + src/), the effective ignore file is the repo
+# root .dockerignore. This file is kept here as documentation of what must be
+# excluded, and applies if you ever build with server/ as the context.
+#
+# Keep secrets and local junk OUT of image layers, and keep the image small.
+
+# Dependencies — reinstalled inside the image via npm ci.
+node_modules
+server/node_modules
+
+# Local render output and temp dirs.
+output
+**/.demowright-tmp
+
+# Secrets / local config (demo configs may carry credentials — never bake them in).
+.env
+.env.*
+*.config.js
+geo-demo.config.js
+
+# VCS + tooling.
+.git
+.github
+.gitignore
+.npmignore
+*.log
+
+# Tests and docs that don't belong in the runtime image.
+test
+**/*.md

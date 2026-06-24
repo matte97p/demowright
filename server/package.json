@@ -1,0 +1,17 @@
+{
+  "name": "demowright-render-service",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Self-hostable HTTP render service for demowright. Deploy your own instance on Google Cloud Run + Cloudflare R2 with your own API keys. Not published to npm.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "aws4fetch": "^1.0.20"
+  }
+}
