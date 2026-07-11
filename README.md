@@ -161,3 +161,8 @@ Part of my open-source toolkit — [github.com/matte97p](https://github.com/matt
 ---
 
 ⭐ If demowright saved you a re-recording, [give it a star](https://github.com/matte97p/demowright) — it helps other people find it.
+
+
+---
+
+<sub>🌐 Built by **Matteo Perino** — [matteoperino.dev](https://matteoperino.dev)</sub>
