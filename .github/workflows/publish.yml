@@ -78,7 +78,7 @@ jobs:
 
       - name: Auto patch-bump if the npm tarball would change
         # Only on a plain push to main (tags are explicit releases) and only on
-        # the canonical repo (forks lack write + NPM_TOKEN).
+        # the canonical repo (a fork has neither write nor npm's trust for this workflow).
         if: github.ref == 'refs/heads/main' && github.repository_owner == 'matte97p'
         run: |
           set -euo pipefail
