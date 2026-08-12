@@ -1,7 +1,25 @@
 name: Publish to npm
 
-# Publishes to npm, gated by lint+test. Three ways in, all safe (npm never sees
-# a duplicate version):
+# Publishes to npm via TRUSTED PUBLISHING (OIDC): no NPM_TOKEN anywhere. npm trusts
+# this workflow in this repo, so the job exchanges its GitHub OIDC identity for a
+# short-lived publish credential and provenance is attached automatically.
+#
+# Why not a token: from 2026-06-23 to 2026-08-12 nothing shipped and nobody noticed.
+# The `ci: security hardening` commit dropped the two lines that passed the secret
+# (`env: NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}`) from the Publish step, and
+# setup-node's generated .npmrc happily fell back to its own placeholder token — so
+# every publish authenticated with the literal string `XXXXX-XXXXX-XXXXX-XXXXX` and
+# the registry answered `E404` on the PUT. On a publish that 404 is a masked 403: the
+# credential is understood and not allowed. Nothing in the logs says "missing token",
+# and 0.1.2 sat unpublished for seven weeks while `npx` kept serving 0.1.1.
+# With OIDC there is no line to forget: remove the `id-token: write` permission below
+# and the job fails loudly instead of shipping nothing.
+#
+# ⚠️ The npm side is a one-time setup, not in this repo: npmjs.com → the package →
+# Settings → Trusted publisher → GitHub Actions, repo `matte97p/demowright`, workflow
+# `publish.yml`, no environment.
+#
+# Gated by lint+test. Three ways in, all safe (npm never sees a duplicate version):
 #   1. Push to `main`, version bumped manually — releases that version.
 #   2. Push to `main`, version NOT bumped — the auto-bump step packs the package
 #      and diffs it against what's live on npm. If a *shipped* file changed
@@ -31,6 +49,13 @@ jobs:
         with:
           node-version: 22
           registry-url: 'https://registry.npmjs.org'
+
+      # Trusted publishing landed in npm 11.5.1. Node 22 ships npm 10.x, which ignores
+      # OIDC and falls back to a token — which is exactly the failure this replaces.
+      - name: Use an npm that can trust-publish (>= 11.5.1)
+        run: |
+          npm install -g npm@latest
+          npm --version
 
       - name: Install dependencies
         run: npm install --no-audit --no-fund --prefer-offline
