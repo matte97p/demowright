@@ -1,0 +1,28 @@
+# Build-context ignore for the repo root (the context root used by
+# `docker build -f server/Dockerfile .` and `gcloud builds submit`).
+# Keeps the context small AND keeps secrets/local junk out of what is
+# uploaded to the build (Cloud Build, daemon). The Dockerfile COPYs are
+# selective, but the whole context is still tarred+uploaded without this.
+.git
+.github
+node_modules
+**/node_modules
+output
+.demowright-tmp
+**/.demowright-tmp
+*.webm
+*.log
+.DS_Store
+
+# Secrets / env — never ship to the build context
+.env
+.env.*
+
+# Private demo configs: carry REAL GeoSuite credentials/selectors (git-ignored too)
+geo-demo.config.js
+examples/geosuite*.config.js
+
+# Not needed in the image build
+test
+assets
+**/*.md
