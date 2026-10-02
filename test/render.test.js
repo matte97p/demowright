@@ -54,3 +54,17 @@ test('covers left in place get their marker painted over, before the crop', () =
 test('remapTime keeps a scene after a timelapse on the sped-up timeline', () => {
   assert.equal(remapTime(20, [{ start: 5, end: 15, factor: 5 }]), 12)
 })
+
+test('theme colours are converted for ffmpeg, and never break the graph', async () => {
+  const { ffmpegColor } = await import('../src/render.js')
+  assert.equal(ffmpegColor('#000'), '0x000000')
+  assert.equal(ffmpegColor('#07070A'), '0x07070a')
+  assert.equal(ffmpegColor('#11223344'), '0x112233')
+  assert.equal(ffmpegColor('rgb(7, 7, 10)'), '0x07070a')
+  assert.equal(ffmpegColor('rgba(255,0,0,.5)'), '0xff0000')
+  assert.equal(ffmpegColor('hsl(0 0% 0%)'), '0x07070a')
+  assert.equal(ffmpegColor(undefined), '0x07070a')
+  const g = buildVideoGraph('landscape', [], 30, { masks: [{ start: 1, end: 2 }], background: 'rgb(1,2,3)' }).join(';')
+  assert.match(g, /color=0x010203:t=fill/)
+  assert.ok(!g.includes('rgb('))
+})

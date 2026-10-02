@@ -11,20 +11,42 @@ import { spawn } from 'node:child_process'
 import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 import ffmpegPath from 'ffmpeg-static'
-import { FORMAT_SIZES } from './scenes.js'
+import { FORMAT_SIZES, assertFormats } from './scenes.js'
 import { MARKER, detectMarkerRuns } from './marker.js'
 import { backdropChain } from './backdrop.js'
 
-/** Video-filter graph per format. `[v]` is the labelled final video pad. */
+/**
+ * Video-filter graph per format, sized from FORMAT_SIZES (the table the scenes
+ * and the backdrop use too). `[v]` is the labelled final video pad.
+ */
+const size = (f) => FORMAT_SIZES[f].width + ':' + FORMAT_SIZES[f].height
 const FILTERS = {
   landscape:
-    '[0:v]scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1[v]',
-  square: '[0:v]crop=ih:ih:(iw-ih)/2:0,scale=1080:1080,setsar=1[v]',
+    '[0:v]scale=' + size('landscape') + ':force_original_aspect_ratio=decrease,pad=' + size('landscape') + ':(ow-iw)/2:(oh-ih)/2,setsar=1[v]',
+  square: '[0:v]crop=ih:ih:(iw-ih)/2:0,scale=' + size('square') + ',setsar=1[v]',
   vertical:
     '[0:v]split=2[bg][fg];' +
-    '[bg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=24:4[bgb];' +
-    '[fg]scale=1080:-2[fgs];' +
+    '[bg]scale=' + size('vertical') + ':force_original_aspect_ratio=increase,crop=' + size('vertical') + ',boxblur=24:4[bgb];' +
+    '[fg]scale=' + FORMAT_SIZES.vertical.width + ':-2[fgs];' +
     '[bgb][fgs]overlay=(W-w)/2:(H-h)/2,setsar=1[v]',
+}
+
+const DEFAULT_BG_HEX = '0x07070a'
+
+/**
+ * A CSS colour as ffmpeg wants it (0xRRGGBB): #rgb, #rrggbb, #rrggbbaa and
+ * rgb()/rgba() are converted; anything else (a name, hsl()) falls back to the
+ * default background, so a theme colour can never break the filter graph.
+ */
+export function ffmpegColor(css) {
+  const c = String(css || '').trim().toLowerCase()
+  let m = c.match(/^#([0-9a-f]{3})$/)
+  if (m) return '0x' + m[1].split('').map((d) => d + d).join('')
+  m = c.match(/^#([0-9a-f]{6})([0-9a-f]{2})?$/)
+  if (m) return '0x' + m[1]
+  m = c.match(/^rgba?\(\s*(\d{1,3})[\s,]+(\d{1,3})[\s,]+(\d{1,3})/)
+  if (m) return '0x' + m.slice(1, 4).map((n) => Math.min(255, +n).toString(16).padStart(2, '0')).join('')
+  return DEFAULT_BG_HEX
 }
 
 /**
@@ -43,9 +65,9 @@ const FILTERS = {
  * `background`, and the plain card the overlay drew stays.
  * Returns the filter parts; the final video pad is labelled [v].
  */
-export function buildVideoGraph(format, segments, fps, { masks = [], background = '#07070a', backdrop = null } = {}) {
-  if (!FILTERS[format]) throw new Error('[demowright] unknown format "' + format + '" (use landscape|square|vertical)')
-  const box = 'drawbox=x=0:y=0:w=' + 2 * MARKER.cell + ':h=' + MARKER.cell + ':color=' + background.replace('#', '0x') + ':t=fill'
+export function buildVideoGraph(format, segments, fps, { masks = [], background, backdrop = null } = {}) {
+  assertFormats([format])
+  const box = 'drawbox=x=0:y=0:w=' + 2 * MARKER.cell + ':h=' + MARKER.cell + ':color=' + ffmpegColor(background) + ':t=fill'
   const paint = masks.map((m) => box + ":enable='between(t," + m.start.toFixed(3) + ',' + m.end.toFixed(3) + ")'").join(',')
   // With a backdrop the capture sits in a window over the background; without,
   // it is cropped to the format.
@@ -290,7 +312,10 @@ export async function renderVideo(rawVideoPath, opts = {}) {
   const sceneRanges = (opts.scenes || []).map(onTimeline)
   // Called without scene clips (runDemo + renderVideo by hand): find the covers
   // anyway, so their markers can be painted over and the plain cards stay clean.
-  const masks = opts.sceneClips ? [] : (await detectMarkerRuns(rawVideoPath)).map(onTimeline)
+  // Skipped when the caller says there are no scenes (`scenes: []`): it is a
+  // decode of the whole capture.
+  const mayHaveCovers = !opts.sceneClips && !(Array.isArray(opts.scenes) && !opts.scenes.length)
+  const masks = mayHaveCovers ? (await detectMarkerRuns(rawVideoPath)).map(onTimeline) : []
 
   const results = []
   for (const format of formats) {

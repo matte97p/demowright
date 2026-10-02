@@ -9,7 +9,7 @@
 import { rm } from 'node:fs/promises'
 import path from 'node:path'
 import { normalizeDemo, defineDemo, estimateDurationMs, STEP_TYPES } from './steps.js'
-import { runDemo, recordScenes, recordBackdrop } from './runner.js'
+import { runDemo, recordScenes, recordBackdrop, runAll } from './runner.js'
 import { renderVideo, remapTime } from './render.js'
 import { synthesizeNarration } from './voice.js'
 import { detectMarkerRuns, matchScenes } from './marker.js'
@@ -21,7 +21,7 @@ export { detectMarkerRuns, matchScenes }
 /**
  * Capture a demo and render it to MP4(s).
  * @param {object} rawDemo  the demo definition ({ url, steps, ... })
- * @param {object} [opts]   { out, formats, music, workDir, keepRaw, onStep, onAuth, onVoice, onScene, onBackdrop }
+ * @param {object} [opts]   { out, formats, music, workDir, keepRaw, signal, onStep, onAuth, onVoice, onScene, onBackdrop }
  * @returns {Promise<{ outputs: Array<{format,path}>, demo: object }>}
  */
 export async function recordDemo(rawDemo, opts = {}) {
@@ -29,10 +29,20 @@ export async function recordDemo(rawDemo, opts = {}) {
   const out = opts.out || path.join(process.cwd(), 'output', demo.name + '.mp4')
   const workDir = opts.workDir || path.join(path.dirname(out), '.demowright-tmp')
 
+  // `opts.signal` stops the whole run: the capture between two steps, and the
+  // scene and backdrop recordings that have not started.
+  const stop = new AbortController()
+  const outer = opts.signal
+  if (outer) {
+    if (outer.aborted) stop.abort(outer.reason)
+    else outer.addEventListener('abort', () => stop.abort(outer.reason), { once: true })
+  }
+
   const { rawVideoPath, timelapses, narration, scenes } = await runDemo(demo, {
     workDir,
     onStep: opts.onStep,
     onAuth: opts.onAuth,
+    signal: stop.signal,
   })
   const formats = opts.formats && opts.formats.length ? opts.formats : demo.formats
 
@@ -52,21 +62,14 @@ export async function recordDemo(rawDemo, opts = {}) {
   if (voiceLines && opts.onVoice) opts.onVoice(narration.length)
   // The first failure stops the recordings that have not started, and is the
   // error reported, once everything in flight has settled.
-  const stop = new AbortController()
-  let first = null
-  const guard = (p) =>
-    p.catch((err) => {
-      if (!first) first = err
-      stop.abort()
-      throw err
-    })
-  const settled = await Promise.allSettled([
-    guard(recordScenes(demo, sceneRanges, formats, { workDir, onScene: opts.onScene, signal: stop.signal })),
-    guard(voiceLines ? synthesizeNarration(narration, demo.voice, workDir) : Promise.resolve([])),
-    guard(recordBackdrop(demo, formats, { workDir, onBackdrop: opts.onBackdrop, signal: stop.signal })),
-  ])
-  if (first) throw first
-  const [sceneClips, voiceCues, backdropAssets] = settled.map((r) => r.value)
+  const [sceneClips, voiceCues, backdropAssets] = await runAll(
+    [
+      () => recordScenes(demo, sceneRanges, formats, { workDir, onScene: opts.onScene, signal: stop.signal }),
+      () => (voiceLines ? synthesizeNarration(narration, demo.voice, workDir) : []),
+      () => recordBackdrop(demo, formats, { workDir, onBackdrop: opts.onBackdrop, signal: stop.signal }),
+    ],
+    stop
+  )
 
   const outputs = await renderVideo(rawVideoPath, {
     out,

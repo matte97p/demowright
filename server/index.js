@@ -29,6 +29,7 @@ import { stat } from 'node:fs/promises'
 // than its npm name (@matte97p/demowright) to avoid a self-dependency / version
 // -skew trap. The Dockerfile copies ../src next to ../server.
 import { recordDemo } from '../src/index.js'
+import { FORMAT_SIZES } from '../src/scenes.js'
 
 import { uploadToR2 } from './r2.js'
 
@@ -52,7 +53,7 @@ const ALLOWED_KEY_ENVS = new Set(
 )
 
 const ENV_NAME_RE = /^[A-Z][A-Z0-9_]*$/
-const KNOWN_FORMATS = new Set(['landscape', 'square', 'vertical'])
+const KNOWN_FORMATS = new Set(Object.keys(FORMAT_SIZES))
 
 // Package version for /health (best-effort; never fatal).
 let VERSION = '0.0.0'
@@ -267,24 +268,30 @@ async function handleRender(req, res) {
   const prior = applyVoiceKeys(voiceKeys)
   const startedAt = Date.now()
 
-  // Wall-clock render timeout. recordDemo has no AbortController hook, so we race
-  // it; cleanup in finally covers the timed-out path too.
+  // Wall-clock render timeout. On expiry the render is told to stop (between two
+  // steps, and before any recording not started yet), and the request answers at
+  // once; the finally below waits for the render to wind down before removing the
+  // work dir, so nothing writes into a deleted directory.
   let timer
+  const stop = new AbortController()
   const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(Object.assign(new Error('render timed out'), { timedOut: true })), RENDER_TIMEOUT_MS)
+    timer = setTimeout(() => {
+      const err = Object.assign(new Error('render timed out'), { timedOut: true })
+      stop.abort(err)
+      reject(err)
+    }, RENDER_TIMEOUT_MS)
+  })
+  const render = recordDemo(demo, {
+    out: outBase,
+    workDir, // keep all artifacts (narration mp3s, raw, final mp4) inside our dir
+    formats: Array.isArray(formats) && formats.length ? formats : undefined,
+    music: music || undefined,
+    keepRaw: true, // we own cleanup in finally; don't let recordDemo rm our dir mid-flight
+    signal: stop.signal,
   })
 
   try {
-    const { outputs } = await Promise.race([
-      recordDemo(demo, {
-        out: outBase,
-        workDir, // keep all artifacts (narration mp3s, raw, final mp4) inside our dir
-        formats: Array.isArray(formats) && formats.length ? formats : undefined,
-        music: music || undefined,
-        keepRaw: true, // we own cleanup in finally; don't let recordDemo rm our dir mid-flight
-      }),
-      timeout,
-    ])
+    const { outputs } = await Promise.race([render, timeout])
     clearTimeout(timer)
 
     // Upload each produced mp4 under a server-generated key (never request-derived).
@@ -317,6 +324,8 @@ async function handleRender(req, res) {
     }
     return sendJson(res, 500, { ok: false, error: 'render failed' })
   } finally {
+    // After a timeout the render is still winding down: let it finish stopping.
+    await render.catch(() => {})
     restoreVoiceKeys(prior)
     // Force-remove the per-request dir on EVERY exit path: success, error, timeout.
     await rm(workDir, { recursive: true, force: true }).catch(() => {})

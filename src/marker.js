@@ -78,14 +78,18 @@ function cellAverage(frame, cellIndex) {
   return [r / n, g / n, b / n]
 }
 
-/** Decode `file` once and return the marker runs it contains. */
-export function detectMarkerRuns(file, runOpts) {
+/**
+ * Decode `file` once and return the marker runs it contains. `maxSec` stops the
+ * decode early, for a clip whose marker can only be at its start.
+ */
+export function detectMarkerRuns(file, { maxSec, ...runOpts } = {}) {
   const c = MARKER.cell
   // Only the corner strip is converted and read, frame by frame as it arrives.
   const vf = 'fps=' + RATE + ':start_time=0,crop=' + 2 * c + ':' + c + ':0:0,format=rgb24'
   const frameBytes = 2 * c * c * 3
+  const limit = maxSec ? ['-t', String(maxSec)] : []
   return new Promise((resolve, reject) => {
-    const proc = spawn(ffmpegPath, ['-v', 'error', '-i', file, '-vf', vf, '-f', 'rawvideo', '-'], {
+    const proc = spawn(ffmpegPath, ['-v', 'error', ...limit, '-i', file, '-vf', vf, '-f', 'rawvideo', '-'], {
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     const markers = []
@@ -117,7 +121,8 @@ export function detectMarkerRuns(file, runOpts) {
  * Throws when the counts or the colours disagree: a silent mismatch would put
  * one scene where another belongs.
  */
-export function matchScenes(scenes, runs) {
+export function matchScenes(scenes, rawRuns) {
+  const runs = mergeInterrupted(rawRuns)
   if (runs.length !== scenes.length) {
     throw new Error(
       '[demowright] found ' + runs.length + ' scene cover(s) in the capture, expected ' + scenes.length +
@@ -143,6 +148,21 @@ export function matchScenes(scenes, runs) {
         : run.end + PAD_SEC
     return { ...sc, start: starts[k], end, toEnd: run.toEnd }
   })
+}
+
+/**
+ * Consecutive scenes alternate their marker, so two runs in a row with the same
+ * marker are one cover interrupted: a page navigation under a sticky end card
+ * shows a few frames of the loading page. The scene clip covers the gap too.
+ */
+export function mergeInterrupted(runs) {
+  const out = []
+  for (const run of runs) {
+    const prev = out[out.length - 1]
+    if (prev && prev.marker === run.marker) out[out.length - 1] = { ...prev, end: run.end, toEnd: run.toEnd }
+    else out.push({ ...run })
+  }
+  return out
 }
 
 /** Under this gap two covers are one scene change, not a glimpse of the page. */

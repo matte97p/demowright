@@ -27,6 +27,11 @@ All notable changes to this project are documented here. The format is based on
   exported, for callers who drive the stages themselves.
 - `scripts/frame-check.mjs` and a CI job that render `examples/scenes.config.js`
   and report the frames the real-time recordings dropped.
+- `recordDemo(demo, { signal })`: an `AbortSignal` stops the run between two
+  steps and skips the recordings not started. The render service uses it on its
+  timeout, and waits for the render to stop before removing its work dir.
+- `DEMOWRIGHT_CPUS` overrides how many CPUs the real-time recordings may use;
+  otherwise a container's CPU quota is honoured.
 
 ### Changed
 - `endcard` is now a `scene` with `preset: 'outro'`: same fields, animated, and
@@ -40,6 +45,8 @@ All notable changes to this project are documented here. The format is based on
 - Scene clips, the backdrop and the voiceover are made side by side, as many
   recordings at once as the machine has cores for.
 - A scene must last at least 600 ms.
+- `runDemo`, `recordScenes` and `recordBackdrop` accept a raw demo and normalize
+  it themselves.
 
 ## [0.1.2] - 2026-08-12
 

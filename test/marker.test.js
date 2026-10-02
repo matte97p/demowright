@@ -63,3 +63,19 @@ test('a count or colour mismatch is an error, not a silent swap', () => {
   assert.throws(() => matchScenes([scene(), scene()], [{ marker: 0, start: 1, end: 2 }]), /found 1 scene cover\(s\)/)
   assert.throws(() => matchScenes([scene()], [{ marker: 1, start: 1, end: 2 }]), /wrong marker/)
 })
+
+test('a cover interrupted by a navigation is still one scene', async () => {
+  const { mergeInterrupted } = await import('../src/marker.js')
+  const runs = [
+    { marker: 0, start: 1, end: 3, toEnd: false },
+    { marker: 1, start: 5, end: 7, toEnd: false },
+    { marker: 1, start: 7.6, end: 10, toEnd: true },
+  ]
+  assert.deepEqual(mergeInterrupted(runs), [
+    { marker: 0, start: 1, end: 3, toEnd: false },
+    { marker: 1, start: 5, end: 10, toEnd: true },
+  ])
+  const [, sticky] = matchScenes([scene(), scene()], runs)
+  assert.equal(sticky.end, 10)
+  assert.equal(sticky.toEnd, true)
+})

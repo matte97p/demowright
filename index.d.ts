@@ -151,6 +151,8 @@ export interface Demo {
 }
 
 export interface RecordOptions {
+  /** Stops the run: the capture between two steps, recordings not started yet. */
+  signal?: AbortSignal
   out?: string
   formats?: Format[]
   music?: string
@@ -214,7 +216,7 @@ export function recordDemo(demo: Demo, opts?: RecordOptions): Promise<{ outputs:
 
 export function runDemo(
   demo: Demo,
-  opts?: { workDir?: string; onStep?: (i: number, step: Step) => void; onAuth?: () => void }
+  opts?: { workDir?: string; onStep?: (i: number, step: Step) => void; onAuth?: () => void; signal?: AbortSignal }
 ): Promise<{
   rawVideoPath: string
   workDir: string
@@ -261,6 +263,7 @@ export function renderVideo(
     workDir?: string
     timelapses?: Timelapse[]
     narration?: Array<{ path: string; atSec: number }>
+    /** The scene ranges; pass [] to skip looking for covers in a capture without scenes. */
     scenes?: SceneRange[]
     sceneClips?: Partial<Record<Format, SceneClip[]>>
     /** Colour painted over the markers of covers rendered without clips. */

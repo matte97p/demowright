@@ -21,6 +21,15 @@ export const FORMAT_SIZES = {
   vertical: { width: 1080, height: 1920 },
 }
 
+/** Throw on a format that is not in FORMAT_SIZES. */
+export function assertFormats(formats) {
+  for (const f of formats) {
+    if (!FORMAT_SIZES[f]) {
+      throw new Error('[demowright] unknown format "' + f + '" (use ' + Object.keys(FORMAT_SIZES).join('|') + ')')
+    }
+  }
+}
+
 export const SCENE_PRESETS = ['title', 'list', 'outro']
 
 const DEFAULT_BG = '#07070a'
