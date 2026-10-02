@@ -17,7 +17,9 @@
  *  - `getBoundingClientRect()` already reflects ancestor CSS transforms, so the
  *    cursor/ring always land on the element as actually rendered, zoom or not.
  */
-export function overlayRuntime(theme) {
+import { MARKER } from './marker.js'
+
+export function overlayRuntime(theme, marker) {
   if (window.__dw) return
   const ACCENT = (theme && theme.accent) || '#e91e63'
   const FONT =
@@ -25,6 +27,7 @@ export function overlayRuntime(theme) {
     'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif'
   const EASE = 'cubic-bezier(0.22, 0.61, 0.36, 1)'
   const BG = (theme && theme.background) || '#07070a'
+  const MARKER = marker
 
   let root = null
   let cursorEl = null
@@ -33,6 +36,9 @@ export function overlayRuntime(theme) {
   let ringEl = null
   let coverEl = null
   let captionTimer = null
+  // A caption shown with no duration (hold) survives a scene: hidden under the
+  // cover, shown again when the cover goes.
+  let captionHeld = false
 
   function ensureRoot() {
     if (root) return
@@ -204,6 +210,7 @@ export function overlayRuntime(theme) {
   api.caption = function (text, ms, opts) {
     ensureRoot()
     if (captionTimer) clearTimeout(captionTimer)
+    captionHeld = !(ms && ms > 0)
     if (opts && opts.style === 'words') fillWords(text, opts.accent)
     else captionEl.textContent = text
     captionEl.style.opacity = '1'
@@ -214,6 +221,11 @@ export function overlayRuntime(theme) {
   }
 
   api.captionHide = function () {
+    captionHeld = false
+    hideCaptionEl()
+  }
+
+  function hideCaptionEl() {
     if (!captionEl) return
     captionEl.style.opacity = '0'
     captionEl.style.transform = 'translateX(-50%) translateY(12px)'
@@ -255,10 +267,11 @@ export function overlayRuntime(theme) {
     b.style.transform = 'none'
   }
 
-  // Full-screen cover held while a motion scene plays. The render stage replaces
-  // this stretch of the capture with the scene recorded at each format's size, so
-  // what matters is only that the page underneath is not visible.
-  api.cover = function (on) {
+  // Full-screen cover held while a motion scene plays. The render stage finds it
+  // by the two marker cells in the top-left corner and swaps that stretch for the
+  // scene recorded at each format's size. The title is drawn too, so a capture
+  // rendered without the scene clips still shows a plain card, not a blank one.
+  api.cover = function (on, k, title, subtitle) {
     ensureRoot()
     if (!coverEl) {
       coverEl = document.createElement('div')
@@ -268,14 +281,48 @@ export function overlayRuntime(theme) {
         top: '0',
         width: '100%',
         height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: '14px',
         background: BG,
+        color: '#fff',
         opacity: '0',
       })
+      const t = document.createElement('div')
+      t.className = '__dw-cover-title'
+      Object.assign(t.style, { fontSize: '56px', fontWeight: '800', letterSpacing: '-0.5px', textAlign: 'center', maxWidth: '86%' })
+      const sub = document.createElement('div')
+      sub.className = '__dw-cover-sub'
+      Object.assign(sub.style, { fontSize: '24px', fontWeight: '500', color: ACCENT })
+      const mk = document.createElement('div')
+      Object.assign(mk.style, { position: 'absolute', left: '0', top: '0', display: 'flex' })
+      for (let c = 0; c < 2; c++) {
+        const cell = document.createElement('div')
+        Object.assign(cell.style, { width: MARKER.cell + 'px', height: MARKER.cell + 'px' })
+        mk.appendChild(cell)
+      }
+      mk.className = '__dw-cover-marker'
+      coverEl.append(t, sub, mk)
       root.appendChild(coverEl)
+    }
+    if (on) {
+      // Same order as markerCells() in marker.js: this function runs in the page
+      // and cannot import it.
+      const cells = k % 2 ? [MARKER.blue, MARKER.red] : [MARKER.red, MARKER.blue]
+      const mk = coverEl.querySelector('.__dw-cover-marker').children
+      mk[0].style.background = cells[0]
+      mk[1].style.background = cells[1]
+      coverEl.querySelector('.__dw-cover-title').textContent = title || ''
+      coverEl.querySelector('.__dw-cover-sub').textContent = subtitle || ''
+      hideCaptionEl()
+    } else if (captionHeld) {
+      captionEl.style.opacity = '1'
+      captionEl.style.transform = 'translateX(-50%) translateY(0)'
     }
     coverEl.style.opacity = on ? '1' : '0'
     cursorEl.style.opacity = on ? '0' : '1'
-    if (on) api.captionHide()
     return true
   }
 
@@ -284,5 +331,5 @@ export function overlayRuntime(theme) {
 
 /** Build the init-script source string that installs the overlay in-page. */
 export function buildInitScript(theme) {
-  return '(' + overlayRuntime.toString() + ')(' + JSON.stringify(theme || {}) + ')'
+  return '(' + overlayRuntime.toString() + ')(' + JSON.stringify(theme || {}) + ', ' + JSON.stringify(MARKER) + ')'
 }

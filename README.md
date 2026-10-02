@@ -69,7 +69,7 @@ Run it and you get `output/demo.mp4` — captions, cursor, and zooms baked in.
 | `scroll` | `selector` \| `y`, `duration?` | smooth-scroll to an element or offset |
 | `wait` | `duration` \| `selector` | pause for ms, or until an element is visible |
 | `scene` | `title`, `preset?`, `subtitle?`, `accent?`, `items?`, `duration?` | full-screen animated card: `title` (default), `list` (needs `items`) or `outro`. See [Motion scenes](#motion-scenes) |
-| `endcard` | `title`, `subtitle?`, `duration?` | closing card: shorthand for a `scene` with `preset: 'outro'` |
+| `endcard` | `title`, `subtitle?`, `duration?` | closing card: a `scene` with `preset: 'outro'` that stays on screen to the end |
 
 Timing is real-time: a `caption` with `duration: 2600` is on screen for 2.6 seconds of video. `wait` with a `selector` is how you sync to your app actually doing something (a request finishing, a result rendering) instead of guessing milliseconds.
 
@@ -133,9 +133,12 @@ steps: [
 - **`accent`** lists the words of the title drawn in `theme.accent`, matched without case or punctuation.
 - **Theme**: scenes read `theme.accent`, `theme.font` and `theme.background` (default `#07070a`). Fonts are the ones installed where the render runs: nothing is fetched, so a render works offline.
 - **Recorded per format.** A scene is its own HTML page, recorded by Playwright at the exact size of every format you ask for, so a centered title is not cut by the square crop or shrunk by the vertical one. During the capture the page is covered for the scene's duration, and the render swaps that stretch for the scene clip of the same length: narration and music stay where they were.
+- **Cut on the frames, not on the clock.** The cover carries two small colour cells in its top-left corner, and the render finds the stretches by reading them from the decoded video. The wall clock runs 0.1 to 0.25 s off the capture depending on the machine, so cutting on it would flash the cover. Keep that corner of the page free of anything drawn on top during a scene.
+- **`endcard` stays to the end**, like it always did, even with steps after it. An explicit `scene` uncovers the page when it is done, unless it is the last step.
+- **Without the clips** (calling `runDemo` and `renderVideo` yourself), a scene renders as a plain card with its title, and its marker is painted over.
 - **An opening scene also hides the page load**: it replaces the capture from its very first frame, so the video starts on the title instead of a white page.
 
-Each scene costs one short extra recording per format, in real time.
+Each scene costs one short extra recording per format, in real time; formats record side by side, and while they do the voiceover is synthesized.
 
 ## Voiceover (optional)
 

@@ -46,6 +46,11 @@ test('an unknown format is rejected', () => {
   assert.throws(() => buildVideoGraph('cinema', [], 30), /unknown format "cinema"/)
 })
 
+test('covers left in place get their marker painted over, before the crop', () => {
+  const g = buildVideoGraph('square', [], 30, { masks: [{ start: 1, end: 2.5 }], background: '#101010' }).join(';')
+  assert.match(g, /^\[0:v\]drawbox=x=0:y=0:w=24:h=12:color=0x101010:t=fill:enable='between\(t,1\.000,2\.500\)',crop=/)
+})
+
 test('remapTime keeps a scene after a timelapse on the sped-up timeline', () => {
   assert.equal(remapTime(20, [{ start: 5, end: 15, factor: 5 }]), 12)
 })

@@ -163,14 +163,26 @@ export interface Timelapse {
   factor: number
 }
 
-/** A stretch of the capture replaced by a scene, in seconds. */
-export interface SceneRange {
+/** A scene step of a capture, in order (what runDemo returns). */
+export interface SceneStep {
   step: Step
+  /** The first step of the demo: the scene also replaces the page load. */
+  opening: boolean
+}
+
+/** A stretch of the capture replaced by a scene, in seconds, read from the frames. */
+export interface SceneRange extends SceneStep {
   start: number
   end: number
-  /** How much earlier than its step the replacement starts. */
-  lead: number
-  /** The closing scene runs to the end of the capture. */
+  /** The scene runs to the end of the capture. */
+  toEnd: boolean
+}
+
+/** One cover found in a video: marker 0 or 1, in seconds. */
+export interface MarkerRun {
+  marker: 0 | 1
+  start: number
+  end: number
   toEnd: boolean
 }
 
@@ -193,8 +205,14 @@ export function runDemo(
   workDir: string
   timelapses: Timelapse[]
   narration: Array<{ text: string; atSec: number }>
-  scenes: SceneRange[]
+  scenes: SceneStep[]
 }>
+
+/** Find the scene covers in a capture, from its frames. */
+export function detectMarkerRuns(file: string, opts?: { maxGapSec?: number; minSec?: number }): Promise<MarkerRun[]>
+
+/** Pair scene steps with the covers found in the capture. Throws on a mismatch. */
+export function matchScenes(scenes: SceneStep[], runs: MarkerRun[]): SceneRange[]
 
 export function recordScenes(
   demo: Demo,
@@ -216,6 +234,8 @@ export function renderVideo(
     narration?: Array<{ path: string; atSec: number }>
     scenes?: SceneRange[]
     sceneClips?: Partial<Record<Format, SceneClip[]>>
+    /** Colour painted over the markers of covers rendered without clips. */
+    background?: string
   }
 ): Promise<Output[]>
 

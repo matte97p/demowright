@@ -7,10 +7,12 @@
  * derivation. This module only builds the markup: it is browser-free, so it can
  * be unit-tested, and the runner decides when and where to record it.
  *
- * The animations are paused until the runner adds `go` to <body>. That moment is
- * what the render stage trims to, so the white frames Playwright records while
- * the page loads never reach the video.
+ * The animations are paused until the runner adds `go` to <body>. Until then the
+ * page also shows the frame marker (see marker.js): the first frame without it is
+ * where the render starts using the clip, so the white frames Playwright records
+ * while the page loads never reach the video.
  */
+import { MARKER, markerCells } from './marker.js'
 
 /** Output size of each format, in pixels. The render stage uses the same table. */
 export const FORMAT_SIZES = {
@@ -132,6 +134,8 @@ export function buildSceneHtml(scene, theme, durationMs, last) {
 *{box-sizing:border-box;margin:0}
 html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:#f5f7fa;font-family:${font}}
 body:not(.go) *{animation-play-state:paused!important}
+.mk{position:fixed;left:0;top:0;display:flex;z-index:9}.mk i{width:${MARKER.cell}px;height:${MARKER.cell}px}
+body.go .mk{display:none}
 .bg,.grid,.vig{position:absolute;inset:0}
 .blob{position:absolute;width:85vmax;height:85vmax;border-radius:50%;animation:dw-drift 16s ease-in-out infinite alternate}
 .b1{left:45%;top:-30%;background:radial-gradient(circle,color-mix(in srgb,var(--accent) 30%,transparent) 0%,transparent 65%)}
@@ -168,6 +172,7 @@ ${exit}`
     '<div class="bg"><div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div></div>' +
     '<div class="grid"></div>' + particles(36) + '<div class="vig"></div>' +
     '<main class="stage">' + body(scene) + '</main>' +
+    '<div class="mk">' + markerCells(0).map((c) => '<i style="background:' + c + '"></i>').join('') + '</div>' +
     '</body></html>'
   )
 }

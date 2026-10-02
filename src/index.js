@@ -12,8 +12,10 @@ import { normalizeDemo, defineDemo, estimateDurationMs, STEP_TYPES } from './ste
 import { runDemo, recordScenes } from './runner.js'
 import { renderVideo } from './render.js'
 import { synthesizeNarration } from './voice.js'
+import { detectMarkerRuns, matchScenes } from './marker.js'
 
 export { defineDemo, normalizeDemo, runDemo, recordScenes, renderVideo, estimateDurationMs, STEP_TYPES }
+export { detectMarkerRuns, matchScenes }
 
 /**
  * Capture a demo and render it to MP4(s).
@@ -33,17 +35,18 @@ export async function recordDemo(rawDemo, opts = {}) {
   })
   const formats = opts.formats && opts.formats.length ? opts.formats : demo.formats
 
-  // Scenes are recorded after the capture, when their real length is known, once
-  // per format at that format's size.
-  const sceneClips = await recordScenes(demo, scenes, formats, { workDir, onScene: opts.onScene })
+  // Where each scene sits in the capture, read from the frames (marker.js).
+  const sceneRanges = scenes.length ? matchScenes(scenes, await detectMarkerRuns(rawVideoPath)) : []
 
-  // Synthesize voiceover (if configured) before rendering, so the lines can be
-  // muxed in at their timestamps. No-op when voice is off or there are no lines.
-  let voiceCues = []
-  if (demo.voice && narration.length) {
-    if (opts.onVoice) opts.onVoice(narration.length)
-    voiceCues = await synthesizeNarration(narration, demo.voice, workDir)
-  }
+  // Scene clips (recorded once per format, at that format's size, now that their
+  // real length is known) and the voiceover (synthesized before rendering, so the
+  // lines can be muxed in at their timestamps) do not depend on each other.
+  const voiceLines = demo.voice && narration.length
+  if (voiceLines && opts.onVoice) opts.onVoice(narration.length)
+  const [sceneClips, voiceCues] = await Promise.all([
+    recordScenes(demo, sceneRanges, formats, { workDir, onScene: opts.onScene }),
+    voiceLines ? synthesizeNarration(narration, demo.voice, workDir) : [],
+  ])
 
   const outputs = await renderVideo(rawVideoPath, {
     out,
@@ -53,8 +56,9 @@ export async function recordDemo(rawDemo, opts = {}) {
     fps: demo.fps,
     timelapses,
     narration: voiceCues,
-    scenes,
+    scenes: sceneRanges,
     sceneClips,
+    background: demo.theme.background,
     workDir,
   })
 

@@ -19,7 +19,6 @@ const DEFAULTS = {
   zoom: { scale: 1.35, duration: 750 },
   zoomReset: { duration: 600 },
   scroll: { duration: 600 },
-  endcard: { duration: 2800 },
   scene: { preset: 'title', duration: 2800 },
   wait: { timeout: 30000 },
 }
@@ -86,17 +85,10 @@ export function normalizeDemo(demo) {
     if (raw.type === 'caption' && raw.style != null && !CAPTION_STYLES.includes(raw.style)) {
       fail('step ' + i + ' (caption) has unknown style "' + raw.style + '". Valid: ' + CAPTION_STYLES.join(', '))
     }
-    // The end card is the outro scene: same fields, recorded per format.
-    if (raw.type === 'endcard') return { ...DEFAULTS.scene, ...raw, type: 'scene', preset: 'outro' }
-    if (raw.type === 'scene') {
-      const preset = raw.preset || DEFAULTS.scene.preset
-      if (!SCENE_PRESETS.includes(preset)) {
-        fail('step ' + i + ' (scene) has unknown preset "' + preset + '". Valid: ' + SCENE_PRESETS.join(', '))
-      }
-      if (preset === 'list' && (!Array.isArray(raw.items) || !raw.items.length)) {
-        fail('step ' + i + ' (scene, list) needs a non-empty "items" array')
-      }
-    }
+    // The end card is the outro scene, and like the end card it always was it
+    // stays on screen to the end of the video, whatever steps follow it.
+    if (raw.type === 'endcard') return normalizeScene(i, { ...raw, type: 'scene', preset: 'outro', sticky: true })
+    if (raw.type === 'scene') return normalizeScene(i, raw)
     return { ...DEFAULTS[raw.type], ...raw }
   })
 
@@ -120,6 +112,26 @@ export function normalizeDemo(demo) {
     voice: normalizeVoice(demo.voice),
     steps,
   }
+}
+
+/** Shortest scene that still reads: under it the reveal and the fade overlap. */
+const MIN_SCENE_MS = 600
+
+function normalizeScene(i, raw) {
+  // Validate the value that ends up in the step: `preset: undefined` must not
+  // pass the check on the default and then overwrite it.
+  const preset = raw.preset == null ? DEFAULTS.scene.preset : raw.preset
+  if (!SCENE_PRESETS.includes(preset)) {
+    fail('step ' + i + ' (scene) has unknown preset "' + preset + '". Valid: ' + SCENE_PRESETS.join(', '))
+  }
+  if (preset === 'list' && (!Array.isArray(raw.items) || !raw.items.length)) {
+    fail('step ' + i + ' (scene, list) needs a non-empty "items" array')
+  }
+  const duration = raw.duration == null ? DEFAULTS.scene.duration : raw.duration
+  if (typeof duration !== 'number' || !(duration >= MIN_SCENE_MS)) {
+    fail('step ' + i + ' (scene) needs a "duration" of at least ' + MIN_SCENE_MS + ' ms')
+  }
+  return { ...raw, preset, duration, sticky: !!raw.sticky }
 }
 
 /**
@@ -181,7 +193,7 @@ export function estimateDurationMs(demo) {
     else if (s.type === 'wait') total += s.duration || 600
     else if (s.type === 'click' || s.type === 'move') total += (s.duration || 0) + 200
     else if (s.type === 'zoom' || s.type === 'zoomReset' || s.type === 'scroll') total += s.duration || 0
-    else if (s.type === 'endcard' || s.type === 'scene') total += s.duration || 0
+    else if (s.type === 'scene') total += s.duration || 0
     else total += 250
   }
   return total

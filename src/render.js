@@ -12,6 +12,7 @@ import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 import ffmpegPath from 'ffmpeg-static'
 import { FORMAT_SIZES } from './scenes.js'
+import { MARKER, detectMarkerRuns } from './marker.js'
 
 /** Video-filter graph per format. `[v]` is the labelled final video pad. */
 const FILTERS = {
@@ -34,11 +35,21 @@ const FILTERS = {
  * `input` is the ffmpeg input index of the scene clip, `offset` where its
  * animation starts. The replaced stretch and the clip have the same length, so
  * the timeline (and every narration cue placed on it) does not move.
+ * `masks` ({ start, end } in seconds) are scene covers left in place because no
+ * clip was recorded for them: their marker cells are painted over with
+ * `background`, and the plain card the overlay drew stays.
  * Returns the filter parts; the final video pad is labelled [v].
  */
-export function buildVideoGraph(format, segments, fps) {
-  const crop = FILTERS[format]
+export function buildVideoGraph(format, segments, fps, { masks = [], background = '#07070a' } = {}) {
+  let crop = FILTERS[format]
   if (!crop) throw new Error('[demowright] unknown format "' + format + '" (use landscape|square|vertical)')
+  if (masks.length) {
+    const box = 'drawbox=x=0:y=0:w=' + 2 * MARKER.cell + ':h=' + MARKER.cell + ':color=' + background.replace('#', '0x') + ':t=fill'
+    const paint = masks
+      .map((m) => box + ":enable='between(t," + m.start.toFixed(3) + ',' + m.end.toFixed(3) + ")'")
+      .join(',')
+    crop = crop.replace('[0:v]', '[0:v]' + paint + ',')
+  }
   const segs = (segments || []).filter((sg) => sg.end > sg.start).sort((a, b) => a.start - b.start)
   if (!segs.length) return [crop]
 
@@ -265,11 +276,15 @@ export async function renderVideo(rawVideoPath, opts = {}) {
   const durationSec = hasMusic || hasVoice ? await probeDurationSec(source) : null
 
   // Scene stretches, moved onto the (post-timelapse) timeline like the cues.
-  const sceneRanges = (opts.scenes || []).map((sc) => ({
+  const onTimeline = (sc) => ({
     start: remapTime(sc.start, opts.timelapses),
     end: remapTime(sc.end, opts.timelapses),
     toEnd: !!sc.toEnd,
-  }))
+  })
+  const sceneRanges = (opts.scenes || []).map(onTimeline)
+  // Called without scene clips (runDemo + renderVideo by hand): find the covers
+  // anyway, so their markers can be painted over and the plain cards stay clean.
+  const masks = opts.sceneClips ? [] : (await detectMarkerRuns(rawVideoPath)).map(onTimeline)
 
   const results = []
   for (const format of formats) {
@@ -285,7 +300,7 @@ export async function renderVideo(rawVideoPath, opts = {}) {
     for (const clip of clips) args.push('-i', clip.path)
     const segments = clips.map((clip, k) => ({ ...sceneRanges[k], input: sceneInput + k, offset: clip.offset }))
 
-    const parts = buildVideoGraph(format, segments, fps)
+    const parts = buildVideoGraph(format, segments, fps, { masks, background: opts.background })
     const audioLabel = buildAudioGraph(parts, {
       hasMusic,
       musicVolume,

@@ -157,11 +157,29 @@ test('a list scene needs items', () => {
   )
 })
 
-test('the end card becomes the outro scene, keeping its fields', () => {
+test('the end card becomes a sticky outro scene, keeping its fields', () => {
   const d = normalizeDemo({ url: 'x', steps: [{ type: 'endcard', title: 'App', subtitle: 'app.com', duration: 2000 }] })
+  const s = d.steps[0]
   assert.deepEqual(
-    { type: d.steps[0].type, preset: d.steps[0].preset, title: d.steps[0].title, subtitle: d.steps[0].subtitle, duration: d.steps[0].duration },
-    { type: 'scene', preset: 'outro', title: 'App', subtitle: 'app.com', duration: 2000 }
+    { type: s.type, preset: s.preset, title: s.title, subtitle: s.subtitle, duration: s.duration, sticky: s.sticky },
+    { type: 'scene', preset: 'outro', title: 'App', subtitle: 'app.com', duration: 2000, sticky: true }
+  )
+})
+
+test('an explicit scene is not sticky', () => {
+  const d = normalizeDemo({ url: 'x', steps: [{ type: 'scene', title: 'Hi' }] })
+  assert.equal(d.steps[0].sticky, false)
+})
+
+test('an undefined preset falls back to the default instead of overwriting it', () => {
+  const d = normalizeDemo({ url: 'x', steps: [{ type: 'scene', title: 'Hi', preset: undefined }] })
+  assert.equal(d.steps[0].preset, 'title')
+})
+
+test('a scene too short to read is rejected', () => {
+  assert.throws(
+    () => normalizeDemo({ url: 'x', steps: [{ type: 'scene', title: 'Hi', duration: 0 }] }),
+    /at least 600 ms/
   )
 })
 
