@@ -50,15 +50,19 @@ jobs:
           node-version: 22
           registry-url: 'https://registry.npmjs.org'
 
+      # Dependencies first, with the npm that ships with Node: npm 12 blocks install
+      # scripts until they are approved, so installing after the upgrade left
+      # ffmpeg-static without its binary and the tests failed on `spawn ENOENT`
+      # (the 0.2.0 release, 2026-10-02).
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund --prefer-offline
+
       # Trusted publishing landed in npm 11.5.1. Node 22 ships npm 10.x, which ignores
-      # OIDC and falls back to a token — which is exactly the failure this replaces.
+      # OIDC and falls back to a token, which is exactly the failure this replaces.
       - name: Use an npm that can trust-publish (>= 11.5.1)
         run: |
           npm install -g npm@latest
           npm --version
-
-      - name: Install dependencies
-        run: npm install --no-audit --no-fund --prefer-offline
 
       - name: Syntax check
         run: npm run lint
