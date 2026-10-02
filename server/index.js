@@ -269,9 +269,10 @@ async function handleRender(req, res) {
   const startedAt = Date.now()
 
   // Wall-clock render timeout. On expiry the render is told to stop (between two
-  // steps, and before any recording not started yet), and the request answers at
-  // once; the finally below waits for the render to wind down before removing the
-  // work dir, so nothing writes into a deleted directory.
+  // steps, recordings not started, the running ffmpeg), and the request answers
+  // only once it has: with --concurrency=1, a 504 sent earlier lets Cloud Run hand
+  // this instance the next request while this render still runs, sharing its CPU
+  // and its process.env (the voice keys) with it.
   let timer
   const stop = new AbortController()
   const timeout = new Promise((_, reject) => {
@@ -312,6 +313,7 @@ async function handleRender(req, res) {
     return sendJson(res, 200, { ok: true, outputs: uploaded, durationMs: Date.now() - startedAt })
   } catch (err) {
     clearTimeout(timer)
+    if (err && err.timedOut) await render.catch(() => {})
     // Scrub before logging AND never echo the upstream message to the client.
     const safe = scrub(err && err.stack ? err.stack : String(err), liveSecrets)
     console.error('[demowright-service] render failed (id=' + renderId + '): ' + safe)
@@ -324,7 +326,8 @@ async function handleRender(req, res) {
     }
     return sendJson(res, 500, { ok: false, error: 'render failed' })
   } finally {
-    // After a timeout the render is still winding down: let it finish stopping.
+    // Every path has let the render settle by now (success, its own error, or the
+    // timeout above), so restoring the keys and removing the dir is safe.
     await render.catch(() => {})
     restoreVoiceKeys(prior)
     // Force-remove the per-request dir on EVERY exit path: success, error, timeout.

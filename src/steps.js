@@ -6,7 +6,7 @@
  * so it can be unit-tested without a browser — the executors live in runner.js.
  */
 
-import { SCENE_PRESETS } from './scenes.js'
+import { SCENE_PRESETS, FORMAT_SIZES } from './scenes.js'
 import { normalizeBackdrop } from './backdrop.js'
 
 /** Default timing (ms) per step kind. Tuned to read well at normal playback. */
@@ -100,7 +100,7 @@ export function normalizeDemo(demo) {
     theme: demo.theme || {},
     music: demo.music || null,
     musicVolume: demo.musicVolume == null ? 0.18 : demo.musicVolume,
-    formats: demo.formats || ['landscape'],
+    formats: normalizeFormats(demo.formats),
     fps: demo.fps || 30,
     // Browser UI locale (e.g. 'it-IT') for the recording context.
     locale: demo.locale || null,
@@ -116,6 +116,15 @@ export function normalizeDemo(demo) {
     voice: normalizeVoice(demo.voice),
     steps,
   }
+}
+
+function normalizeFormats(formats) {
+  if (formats == null) return ['landscape']
+  if (!Array.isArray(formats) || !formats.length) fail('"formats" must be a non-empty array')
+  for (const f of formats) {
+    if (!FORMAT_SIZES[f]) fail('unknown format "' + f + '". Valid: ' + Object.keys(FORMAT_SIZES).join(', '))
+  }
+  return formats
 }
 
 /** Shortest scene that still reads: under it the reveal and the fade overlap. */

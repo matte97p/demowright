@@ -28,8 +28,9 @@ All notable changes to this project are documented here. The format is based on
 - `scripts/frame-check.mjs` and a CI job that render `examples/scenes.config.js`
   and report the frames the real-time recordings dropped.
 - `recordDemo(demo, { signal })`: an `AbortSignal` stops the run between two
-  steps and skips the recordings not started. The render service uses it on its
-  timeout, and waits for the render to stop before removing its work dir.
+  steps, cuts the recordings in progress short, skips the ones not started and
+  kills a running ffmpeg (`renderVideo` takes the same `signal`). The render
+  service uses it on its timeout, and answers only once the render has stopped.
 - `DEMOWRIGHT_CPUS` overrides how many CPUs the real-time recordings may use;
   otherwise a container's CPU quota is honoured.
 
@@ -44,7 +45,8 @@ All notable changes to this project are documented here. The format is based on
   0.1 to 0.25 seconds ahead of the video.
 - Scene clips, the backdrop and the voiceover are made side by side, as many
   recordings at once as the machine has cores for.
-- A scene must last at least 600 ms.
+- A scene must last at least 600 ms, and an unknown format is rejected by
+  `normalizeDemo`, before anything is recorded.
 - `runDemo`, `recordScenes` and `recordBackdrop` accept a raw demo and normalize
   it themselves.
 

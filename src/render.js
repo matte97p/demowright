@@ -119,16 +119,22 @@ export function buildVideoGraph(format, segments, fps, { masks = [], background,
   return parts
 }
 
-export function runFfmpeg(args) {
+/** Run ffmpeg; an aborted `signal` kills it and rejects with the abort reason. */
+export function runFfmpeg(args, signal) {
   return new Promise((resolve, reject) => {
+    if (signal && signal.aborted) return reject(signal.reason || new Error('[demowright] stopped'))
     const proc = spawn(ffmpegPath, args, { stdio: ['ignore', 'ignore', 'pipe'] })
+    const kill = () => proc.kill('SIGKILL')
+    if (signal) signal.addEventListener('abort', kill, { once: true })
+    proc.on('close', () => signal && signal.removeEventListener('abort', kill))
     let stderr = ''
     proc.stderr.on('data', (d) => {
       stderr += d.toString()
     })
     proc.on('error', reject)
     proc.on('close', (code) => {
-      if (code === 0) resolve()
+      if (signal && signal.aborted) reject(signal.reason || new Error('[demowright] stopped'))
+      else if (code === 0) resolve()
       else reject(new Error('ffmpeg exited ' + code + '\n' + stderr.split('\n').slice(-12).join('\n')))
     })
   })
@@ -183,7 +189,7 @@ export function remapTime(t, timelapses) {
  * path to a new intermediate video; the format crops then run on top of it. With
  * no ranges, the original path is returned untouched.
  */
-async function applyTimelapse(rawVideoPath, timelapses, workDir, fps) {
+async function applyTimelapse(rawVideoPath, timelapses, workDir, fps, signal) {
   const ranges = (timelapses || [])
     .filter((t) => t && t.factor > 1 && t.end > t.start)
     .sort((a, b) => a.start - b.start)
@@ -220,7 +226,7 @@ async function applyTimelapse(rawVideoPath, timelapses, workDir, fps) {
     '-filter_complex', filter, '-map', '[v]',
     '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'medium', '-crf', '18',
     '-r', String(fps), out,
-  ])
+  ], signal)
   return out
 }
 
@@ -287,7 +293,8 @@ export async function renderVideo(rawVideoPath, opts = {}) {
 
   // Speed up the marked dead-wait ranges once, up front; the format crops then
   // run on top of the time-lapsed intermediate.
-  const source = await applyTimelapse(rawVideoPath, opts.timelapses, workDir, fps)
+  const signal = opts.signal
+  const source = await applyTimelapse(rawVideoPath, opts.timelapses, workDir, fps, signal)
 
   // Narration cues, with timestamps remapped onto the (post-timelapse) timeline.
   const cues = (opts.narration || []).map((c) => ({
@@ -314,8 +321,15 @@ export async function renderVideo(rawVideoPath, opts = {}) {
   // anyway, so their markers can be painted over and the plain cards stay clean.
   // Skipped when the caller says there are no scenes (`scenes: []`): it is a
   // decode of the whole capture.
-  const mayHaveCovers = !opts.sceneClips && !(Array.isArray(opts.scenes) && !opts.scenes.length)
-  const masks = mayHaveCovers ? (await detectMarkerRuns(rawVideoPath)).map(onTimeline) : []
+  // Decided per format (a caller may pass clips for some formats only), and the
+  // decode runs at most once.
+  const mayHaveCovers = !(Array.isArray(opts.scenes) && !opts.scenes.length)
+  let coverRuns = null
+  const masksFor = async (clipCount) => {
+    if (clipCount || !mayHaveCovers) return []
+    if (!coverRuns) coverRuns = (await detectMarkerRuns(rawVideoPath)).map(onTimeline)
+    return coverRuns
+  }
 
   const results = []
   for (const format of formats) {
@@ -341,6 +355,7 @@ export async function renderVideo(rawVideoPath, opts = {}) {
       backdrop = { geometry: assets.geometry, inputs: { bg: at, chrome: at + 1, mask: at + 2, shadow: at + 3 } }
     }
 
+    const masks = await masksFor(clips.length)
     const parts = buildVideoGraph(format, segments, fps, { masks, background: opts.background, backdrop })
     const audioLabel = buildAudioGraph(parts, {
       hasMusic,
@@ -367,7 +382,7 @@ export async function renderVideo(rawVideoPath, opts = {}) {
     else if (hasMusic || backdrop) args.push('-shortest')
     args.push(out)
 
-    await runFfmpeg(args)
+    await runFfmpeg(args, signal)
     results.push({ format, path: out })
   }
   return results

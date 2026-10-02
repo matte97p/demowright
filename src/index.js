@@ -9,11 +9,11 @@
 import { rm } from 'node:fs/promises'
 import path from 'node:path'
 import { normalizeDemo, defineDemo, estimateDurationMs, STEP_TYPES } from './steps.js'
-import { runDemo, recordScenes, recordBackdrop, runAll } from './runner.js'
+import { runDemo, recordScenes, recordBackdrop, runAll, followSignal, checkAborted } from './runner.js'
 import { renderVideo, remapTime } from './render.js'
 import { synthesizeNarration } from './voice.js'
 import { detectMarkerRuns, matchScenes } from './marker.js'
-import { LOOP_SEC } from './scenes.js'
+import { LOOP_SEC, assertFormats } from './scenes.js'
 
 export { defineDemo, normalizeDemo, runDemo, recordScenes, recordBackdrop, renderVideo, estimateDurationMs, STEP_TYPES }
 export { detectMarkerRuns, matchScenes }
@@ -29,14 +29,20 @@ export async function recordDemo(rawDemo, opts = {}) {
   const out = opts.out || path.join(process.cwd(), 'output', demo.name + '.mp4')
   const workDir = opts.workDir || path.join(path.dirname(out), '.demowright-tmp')
 
-  // `opts.signal` stops the whole run: the capture between two steps, and the
-  // scene and backdrop recordings that have not started.
-  const stop = new AbortController()
-  const outer = opts.signal
-  if (outer) {
-    if (outer.aborted) stop.abort(outer.reason)
-    else outer.addEventListener('abort', () => stop.abort(outer.reason), { once: true })
+  // `opts.signal` stops the whole run: the capture between two steps, the scene
+  // and backdrop recordings not started, and the render's ffmpeg.
+  const { controller: stop, release } = followSignal(opts.signal)
+  try {
+    return await record(demo, out, workDir, opts, stop)
+  } finally {
+    release()
   }
+}
+
+async function record(demo, out, workDir, opts, stop) {
+  const formats = opts.formats && opts.formats.length ? opts.formats : demo.formats
+  // An unknown format fails now, not after the whole capture.
+  assertFormats(formats)
 
   const { rawVideoPath, timelapses, narration, scenes } = await runDemo(demo, {
     workDir,
@@ -44,7 +50,6 @@ export async function recordDemo(rawDemo, opts = {}) {
     onAuth: opts.onAuth,
     signal: stop.signal,
   })
-  const formats = opts.formats && opts.formats.length ? opts.formats : demo.formats
 
   // Where each scene sits in the capture, read from the frames (marker.js). Over
   // a backdrop, a scene starts its background where the window's loop is at that
@@ -70,6 +75,7 @@ export async function recordDemo(rawDemo, opts = {}) {
     ],
     stop
   )
+  checkAborted(stop.signal)
 
   const outputs = await renderVideo(rawVideoPath, {
     out,
@@ -83,6 +89,7 @@ export async function recordDemo(rawDemo, opts = {}) {
     sceneClips,
     backdropAssets,
     background: demo.theme.background,
+    signal: stop.signal,
     workDir,
   })
 

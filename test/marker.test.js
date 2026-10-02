@@ -79,3 +79,12 @@ test('a cover interrupted by a navigation is still one scene', async () => {
   assert.equal(sticky.end, 10)
   assert.equal(sticky.toEnd, true)
 })
+
+test('runs are cut on the frames own timestamps', () => {
+  const times = [0, 0.04, 0.08, 0.12, 0.16, 0.2, 0.24, 0.28, 0.32]
+  const runs = runsFromSamples([null, 0, 0, 0, null, null, null, null, null], times, { minSec: 0 })
+  assert.deepEqual(runs, [{ marker: 0, start: 0.04, end: 0.16, toEnd: false }])
+  const tail = runsFromSamples([null, null, null, null, null, null, 1, 1, 1], times, { minSec: 0 })
+  assert.equal(tail[0].toEnd, true)
+  assert.ok(Math.abs(tail[0].end - 0.36) < 1e-9)
+})

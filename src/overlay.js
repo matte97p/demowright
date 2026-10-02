@@ -17,7 +17,7 @@
  *  - `getBoundingClientRect()` already reflects ancestor CSS transforms, so the
  *    cursor/ring always land on the element as actually rendered, zoom or not.
  */
-import { MARKER } from './marker.js'
+import { MARKER, markerCells } from './marker.js'
 
 export function overlayRuntime(theme, marker) {
   if (window.__dw) return
@@ -308,9 +308,8 @@ export function overlayRuntime(theme, marker) {
       root.appendChild(coverEl)
     }
     if (on) {
-      // Same order as markerCells() in marker.js: this function runs in the page
-      // and cannot import it.
-      const cells = k % 2 ? [MARKER.blue, MARKER.red] : [MARKER.red, MARKER.blue]
+      // The colour orders come from markerCells() in marker.js, serialized in.
+      const cells = MARKER.orders[k % 2]
       const mk = coverEl.querySelector('.__dw-cover-marker').children
       mk[0].style.background = cells[0]
       mk[1].style.background = cells[1]
@@ -331,5 +330,21 @@ export function overlayRuntime(theme, marker) {
 
 /** Build the init-script source string that installs the overlay in-page. */
 export function buildInitScript(theme) {
-  return '(' + overlayRuntime.toString() + ')(' + JSON.stringify(theme || {}) + ', ' + JSON.stringify(MARKER) + ')'
+  const marker = { ...MARKER, orders: [markerCells(0), markerCells(1)] }
+  return '(' + overlayRuntime.toString() + ')(' + JSON.stringify(theme || {}) + ', ' + JSON.stringify(marker) + ')'
+}
+
+/**
+ * Init script that puts a held cover (the end card, once it has run) back up on
+ * every new page, whatever caused the navigation: a `goto`, a link, a redirect.
+ * The overlay of the new page is installed by the init script above.
+ */
+export function buildHeldCoverScript(sceneIndex, title, subtitle) {
+  const args = JSON.stringify([sceneIndex, title || '', subtitle || ''])
+  return (
+    '(() => { const a = ' + args + ';' +
+    ' const up = () => window.__dw && window.__dw.cover(true, a[0], a[1], a[2]);' +
+    " if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', up); else up();" +
+    ' })()'
+  )
 }

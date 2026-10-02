@@ -62,3 +62,10 @@ test('a scene can start its background part way into the loop', () => {
   // Every background animation takes the phase into account.
   assert.equal((html.match(/var\(--ph\)/g) || []).length >= 4 + 36, true)
 })
+
+test('the held cover script puts the cover back with escaped data', async () => {
+  const { buildHeldCoverScript } = await import('../src/overlay.js')
+  const js = buildHeldCoverScript(1, 'End "card"', '</script>')
+  assert.ok(js.includes('window.__dw.cover(true, a[0], a[1], a[2])'))
+  assert.ok(js.includes(JSON.stringify([1, 'End "card"', '</script>'])))
+})

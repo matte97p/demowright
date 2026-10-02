@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { runAll, cpuBudget } from '../src/runner.js'
+import { runAll, cpuBudget, followSignal, checkAborted } from '../src/runner.js'
 
 test('runAll returns results in order, plain values included', async () => {
   const c = new AbortController()
@@ -33,4 +33,16 @@ test('DEMOWRIGHT_CPUS overrides the detected CPU budget', () => {
     else process.env.DEMOWRIGHT_CPUS = prev
   }
   assert.ok(cpuBudget() >= 1)
+})
+
+test('followSignal follows, honours an already aborted signal, and detaches', () => {
+  const outer = new AbortController()
+  const a = followSignal(outer.signal)
+  a.release()
+  outer.abort(new Error('late'))
+  assert.equal(a.controller.signal.aborted, false)
+
+  const b = followSignal(outer.signal)
+  assert.equal(b.controller.signal.aborted, true)
+  assert.throws(() => checkAborted(b.controller.signal), /late/)
 })

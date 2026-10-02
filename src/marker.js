@@ -32,31 +32,42 @@ export function classifyCells(px) {
 }
 
 /**
- * Group per-sample markers into runs. A one-off miss inside a run (a compression
- * artefact) does not split it, a run shorter than `minSec` is noise.
+ * Group per-frame markers into runs. `times` is each frame's timestamp (seconds),
+ * or a number for evenly spaced samples at that rate. A run ends where the next
+ * frame starts. A one-off miss inside a run (a compression artefact) does not
+ * split it, and a run shorter than `minSec` is noise.
  * Returns [{ marker, start, end, toEnd }] in seconds.
  */
-export function runsFromSamples(markers, rate, { maxGapSec = 0.1, minSec = 0.05 } = {}) {
+export function runsFromSamples(markers, times, { maxGapSec = 0.1, minSec = 0.05 } = {}) {
+  const at = typeof times === 'number' ? (i) => i / times : (i) => times[i]
+  const step = typeof times === 'number' ? 1 / times : typicalStep(times)
+  const frameEnd = (i) => (i + 1 < markers.length ? at(i + 1) : at(i) + step)
   const runs = []
   let cur = null
   markers.forEach((m, i) => {
     if (m == null) return
-    const t = i / rate
+    const t = at(i)
     if (!cur || cur.marker !== m || t - cur.end > maxGapSec) {
       cur = { marker: m, start: t }
       runs.push(cur)
     }
-    cur.end = t + 1 / rate
+    cur.end = frameEnd(i)
     cur.lastIndex = i
   })
-  const lastSample = markers.length - 1
+  const videoEnd = markers.length ? frameEnd(markers.length - 1) : 0
   return runs
     .filter((r) => r.end - r.start >= minSec)
-    .map((r) => ({ marker: r.marker, start: r.start, end: r.end, toEnd: lastSample - r.lastIndex <= Math.ceil(maxGapSec * rate) }))
+    .map((r) => ({ marker: r.marker, start: r.start, end: r.end, toEnd: videoEnd - r.end <= maxGapSec + 1e-9 }))
 }
 
-/** Sample rate of the detection pass: 100 per second, so a cut is within 10 ms. */
-const RATE = 100
+/** Median spacing of the timestamps, the length given to the last frame. */
+function typicalStep(times) {
+  const d = []
+  for (let i = 1; i < times.length; i++) d.push(times[i] - times[i - 1])
+  d.sort((a, b) => a - b)
+  return d.length ? d[d.length >> 1] : 0.04
+}
+
 
 /** Average colour of one cell, from an rgb24 frame of the 2-cell corner strip. */
 function cellAverage(frame, cellIndex) {
@@ -79,22 +90,25 @@ function cellAverage(frame, cellIndex) {
 }
 
 /**
- * Decode `file` once and return the marker runs it contains. `maxSec` stops the
- * decode early, for a clip whose marker can only be at its start.
+ * Decode `file` once and return the marker runs it contains, cut on the frames'
+ * own timestamps (each frame read once, at the rate it was recorded). `maxSec`
+ * stops the decode early, for a clip whose marker can only be at its start.
  */
 export function detectMarkerRuns(file, { maxSec, ...runOpts } = {}) {
   const c = MARKER.cell
-  // Only the corner strip is converted and read, frame by frame as it arrives.
-  const vf = 'fps=' + RATE + ':start_time=0,crop=' + 2 * c + ':' + c + ':0:0,format=rgb24'
+  // Only the corner strip is converted and read, frame by frame as it arrives;
+  // showinfo reports each frame's timestamp on stderr, in the same order.
+  const vf = 'crop=' + 2 * c + ':' + c + ':0:0,format=rgb24,showinfo'
   const frameBytes = 2 * c * c * 3
   const limit = maxSec ? ['-t', String(maxSec)] : []
   return new Promise((resolve, reject) => {
-    const proc = spawn(ffmpegPath, ['-v', 'error', ...limit, '-i', file, '-vf', vf, '-f', 'rawvideo', '-'], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
+    const args = ['-hide_banner', '-loglevel', 'info', ...limit, '-i', file, '-vf', vf, '-fps_mode', 'passthrough', '-f', 'rawvideo', '-']
+    const proc = spawn(ffmpegPath, args, { stdio: ['ignore', 'pipe', 'pipe'] })
     const markers = []
+    const times = []
     let pending = Buffer.alloc(0)
-    let stderr = ''
+    let errTail = ''
+    let errLine = ''
     proc.stdout.on('data', (d) => {
       pending = pending.length ? Buffer.concat([pending, d]) : d
       let at = 0
@@ -105,12 +119,21 @@ export function detectMarkerRuns(file, { maxSec, ...runOpts } = {}) {
       pending = pending.subarray(at)
     })
     proc.stderr.on('data', (d) => {
-      stderr += d.toString()
+      const lines = (errLine + d.toString()).split('\n')
+      errLine = lines.pop()
+      for (const line of lines) {
+        const m = line.match(/\bn:\s*\d+.*\bpts_time:\s*(-?[\d.]+)/)
+        if (m) times.push(Number(m[1]))
+        else errTail = (errTail + line + '\n').slice(-2000)
+      }
     })
     proc.on('error', reject)
     proc.on('close', (code) => {
-      if (code !== 0) return reject(new Error('marker detection failed: ffmpeg exited ' + code + '\n' + stderr))
-      resolve(runsFromSamples(markers, RATE, runOpts))
+      if (code !== 0) return reject(new Error('marker detection failed: ffmpeg exited ' + code + '\n' + errTail))
+      if (times.length !== markers.length) {
+        return reject(new Error('marker detection: ' + markers.length + ' frames but ' + times.length + ' timestamps'))
+      }
+      resolve(runsFromSamples(markers, times, runOpts))
     })
   })
 }

@@ -7,7 +7,7 @@ import { mkdir, rm } from 'node:fs/promises'
 import { readFileSync } from 'node:fs'
 import { availableParallelism } from 'node:os'
 import path from 'node:path'
-import { buildInitScript } from './overlay.js'
+import { buildInitScript, buildHeldCoverScript } from './overlay.js'
 import { buildSceneHtml, buildBackgroundHtml, FORMAT_SIZES, LOOP_SEC, assertFormats } from './scenes.js'
 import { backdropGeometry, chromeHtml, maskHtml, shadowHtml } from './backdrop.js'
 import { runFfmpeg } from './render.js'
@@ -42,12 +42,10 @@ const EXECUTORS = {
     await sleep(page, 340)
   },
 
-  async goto(page, step, demo, { held }) {
+  async goto(page, step) {
     await page.goto(step.url, { waitUntil: 'load' })
     await page.waitForFunction(() => !!window.__dw).catch(() => {})
     await dw(page, 'ready')
-    // The new page has a fresh overlay: a held end card goes back up at once.
-    if (held) await dw(page, 'cover', true, held.sceneIndex, held.step.title, held.step.subtitle || '')
     await sleep(page, 400)
   },
 
@@ -286,9 +284,12 @@ export async function runDemo(rawDemo, opts = {}) {
       } catch (err) {
         throw new Error('step ' + i + ' (' + step.type + ') failed: ' + err.message)
       }
-      // From a sticky scene on, the cover is held: later scenes keep it up, and a
-      // navigation puts back the latest one.
-      if (step.type === 'scene' && (step.sticky || held)) held = { step, sceneIndex }
+      // From a sticky scene on, the cover is held: later scenes keep it up, and
+      // every new page (a goto, a link, a redirect) gets the latest one back.
+      if (step.type === 'scene' && (step.sticky || held)) {
+        held = { step, sceneIndex }
+        await page.addInitScript(buildHeldCoverScript(sceneIndex, step.title, step.subtitle))
+      }
       if (tlStart != null) {
         timelapses.push({ start: tlStart, end: (Date.now() - recordStart) / 1000, factor: step.timelapse })
       }
@@ -343,14 +344,16 @@ function limiter(n) {
   let active = 0
   const waiting = []
   return async (fn) => {
+    // A freed slot is handed straight to the next waiter, never released in
+    // between: a caller arriving in that gap would make it n + 1.
     if (active >= n) await new Promise((resolve) => waiting.push(resolve))
-    active++
+    else active++
     try {
       return await fn()
     } finally {
-      active--
       const next = waiting.shift()
       if (next) next()
+      else active--
     }
   }
 }
@@ -379,10 +382,42 @@ export async function runAll(jobs, controller) {
   return results.map((r) => r.value)
 }
 
+/**
+ * A controller that follows `outer` (already aborted counts too). `release()`
+ * detaches it, so a long-lived outer signal does not keep every run alive.
+ */
+export function followSignal(outer) {
+  const controller = new AbortController()
+  if (!outer) return { controller, release: () => {} }
+  if (outer.aborted) {
+    controller.abort(outer.reason)
+    return { controller, release: () => {} }
+  }
+  const relay = () => controller.abort(outer.reason)
+  outer.addEventListener('abort', relay, { once: true })
+  return { controller, release: () => outer.removeEventListener('abort', relay) }
+}
+
 /** Throw the abort reason (or a plain "stopped") when `signal` has fired. */
-function checkAborted(signal) {
+export function checkAborted(signal) {
   if (!signal || !signal.aborted) return
   throw signal.reason instanceof Error ? signal.reason : new Error('[demowright] stopped')
+}
+
+/** Wait `ms`, or reject with the abort reason as soon as `signal` fires. */
+function waitOrAbort(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal && signal.aborted) return reject(signal.reason || new Error('[demowright] stopped'))
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(signal.reason || new Error('[demowright] stopped'))
+    }
+    const timer = setTimeout(() => {
+      if (signal) signal.removeEventListener('abort', onAbort)
+      resolve()
+    }, Math.max(0, ms))
+    if (signal) signal.addEventListener('abort', onAbort, { once: true })
+  })
 }
 
 /** Start-marker holds tried in turn: a busy machine starts the video later. */
@@ -401,15 +436,20 @@ async function recordClip(browser, dir, size, html, runMs, label, signal, onStar
       // Progress is reported when the recording really starts, not when queued.
       if (onStart && attempt === 0) onStart()
       const context = await browser.newContext({ viewport: size, deviceScaleFactor: 1, recordVideo: { dir, size }, reducedMotion: 'no-preference' })
-      const page = await context.newPage()
-      await page.setContent(html, { waitUntil: 'load' })
-      await page.evaluate(() => document.fonts.ready)
-      await sleep(page, hold)
-      await page.evaluate(() => document.body.classList.add('go'))
-      await sleep(page, runMs)
-      const video = page.video()
-      await context.close()
-      return video.path()
+      try {
+        const page = await context.newPage()
+        await page.setContent(html, { waitUntil: 'load' })
+        await page.evaluate(() => document.fonts.ready)
+        await waitOrAbort(hold, signal)
+        await page.evaluate(() => document.body.classList.add('go'))
+        // A stop cuts a recording in progress short (the backdrop loop is 12 s).
+        await waitOrAbort(runMs, signal)
+        const video = page.video()
+        await context.close()
+        return video.path()
+      } finally {
+        await context.close().catch(() => {})
+      }
     })
     // The marker can only be at the start: decode just past the longest hold.
     const runs = await detectMarkerRuns(clipPath, { minSec: 0, maxSec: hold / 1000 + 4 })
@@ -461,20 +501,19 @@ export async function recordScenes(rawDemo, scenes, formats, opts = {}) {
  */
 async function withStage(name, formats, opts, fn) {
   assertFormats(formats)
-  const controller = new AbortController()
-  const outer = opts.signal
-  if (outer) {
-    if (outer.aborted) controller.abort(outer.reason)
-    else outer.addEventListener('abort', () => controller.abort(outer.reason), { once: true })
-  }
-  checkAborted(controller.signal)
-  const dir = path.join(opts.workDir || path.join(process.cwd(), '.demowright-tmp'), name)
-  await mkdir(dir, { recursive: true })
-  const browser = await chromium.launch({ headless: true })
+  const { controller, release } = followSignal(opts.signal)
   try {
-    return await fn({ browser, dir, controller })
+    checkAborted(controller.signal)
+    const dir = path.join(opts.workDir || path.join(process.cwd(), '.demowright-tmp'), name)
+    await mkdir(dir, { recursive: true })
+    const browser = await chromium.launch({ headless: true })
+    try {
+      return await fn({ browser, dir, controller })
+    } finally {
+      await browser.close()
+    }
   } finally {
-    await browser.close()
+    release()
   }
 }
 
@@ -519,7 +558,7 @@ export async function recordBackdrop(rawDemo, formats, opts = {}) {
         await runFfmpeg([
           '-y', '-loglevel', 'error', '-ss', clip.offset.toFixed(3), '-i', clip.path, '-t', String(LOOP_SEC),
           '-vf', 'fps=' + demo.fps + ',format=yuv420p', '-c:v', 'libx264', '-preset', 'medium', '-crf', '18', background,
-        ])
+        ], controller.signal)
         out[format] = { background, chrome, mask, shadow, geometry }
       }),
       controller

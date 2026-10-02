@@ -270,6 +270,8 @@ export function renderVideo(
     background?: string
     /** From recordBackdrop: per format, the background loop and the window images. */
     backdropAssets?: Partial<Record<Format, BackdropAssets>>
+    /** Kills the running ffmpeg and rejects with the abort reason. */
+    signal?: AbortSignal
   }
 ): Promise<Output[]>
 

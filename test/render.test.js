@@ -68,3 +68,13 @@ test('theme colours are converted for ffmpeg, and never break the graph', async 
   assert.match(g, /color=0x010203:t=fill/)
   assert.ok(!g.includes('rgb('))
 })
+
+test('an aborted signal kills ffmpeg and rejects with its reason', async () => {
+  const { runFfmpeg } = await import('../src/render.js')
+  const c = new AbortController()
+  const run = runFfmpeg(['-v', 'error', '-f', 'lavfi', '-i', 'testsrc=duration=60:size=320x240', '-f', 'null', '-'], c.signal)
+  setTimeout(() => c.abort(new Error('timed out')), 100)
+  const t0 = Date.now()
+  await assert.rejects(run, /timed out/)
+  assert.ok(Date.now() - t0 < 5000)
+})

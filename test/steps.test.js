@@ -195,3 +195,11 @@ test('scenes count toward the estimated length', () => {
   const d = normalizeDemo({ url: 'x', steps: [{ type: 'scene', title: 'Hi', duration: 3000 }] })
   assert.equal(estimateDurationMs(d), 3700)
 })
+
+test('an unknown format is rejected before anything is recorded', () => {
+  assert.throws(
+    () => normalizeDemo({ url: 'x', formats: ['portrait'], steps: [{ type: 'caption', text: 'x' }] }),
+    /unknown format "portrait"/
+  )
+  assert.throws(() => normalizeDemo({ url: 'x', formats: [], steps: [{ type: 'caption', text: 'x' }] }), /non-empty array/)
+})
