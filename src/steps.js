@@ -6,6 +6,9 @@
  * so it can be unit-tested without a browser — the executors live in runner.js.
  */
 
+import { SCENE_PRESETS, FORMAT_SIZES } from './scenes.js'
+import { normalizeBackdrop } from './backdrop.js'
+
 /** Default timing (ms) per step kind. Tuned to read well at normal playback. */
 const DEFAULTS = {
   caption: { duration: 2600 },
@@ -17,9 +20,11 @@ const DEFAULTS = {
   zoom: { scale: 1.35, duration: 750 },
   zoomReset: { duration: 600 },
   scroll: { duration: 600 },
-  endcard: { duration: 2800 },
+  scene: { preset: 'title', duration: 2800 },
   wait: { timeout: 30000 },
 }
+
+const CAPTION_STYLES = ['bar', 'words']
 
 /** Every supported step type and the fields it requires. */
 export const STEP_TYPES = {
@@ -38,6 +43,7 @@ export const STEP_TYPES = {
   scroll: { required: [] }, // selector OR y
   wait: { required: [] }, // duration OR selector
   endcard: { required: ['title'] },
+  scene: { required: ['title'] },
 }
 
 function fail(msg) {
@@ -77,6 +83,13 @@ export function normalizeDemo(demo) {
     if (raw.type === 'wait' && raw.duration == null && raw.selector == null) {
       fail('step ' + i + ' (wait) needs either "duration" (ms) or "selector"')
     }
+    if (raw.type === 'caption' && raw.style != null && !CAPTION_STYLES.includes(raw.style)) {
+      fail('step ' + i + ' (caption) has unknown style "' + raw.style + '". Valid: ' + CAPTION_STYLES.join(', '))
+    }
+    // The end card is the outro scene, and like the end card it always was it
+    // stays on screen to the end of the video, whatever steps follow it.
+    if (raw.type === 'endcard') return normalizeScene(i, { ...raw, type: 'scene', preset: 'outro', sticky: true })
+    if (raw.type === 'scene') return normalizeScene(i, raw)
     return { ...DEFAULTS[raw.type], ...raw }
   })
 
@@ -87,7 +100,7 @@ export function normalizeDemo(demo) {
     theme: demo.theme || {},
     music: demo.music || null,
     musicVolume: demo.musicVolume == null ? 0.18 : demo.musicVolume,
-    formats: demo.formats || ['landscape'],
+    formats: normalizeFormats(demo.formats),
     fps: demo.fps || 30,
     // Browser UI locale (e.g. 'it-IT') for the recording context.
     locale: demo.locale || null,
@@ -95,11 +108,43 @@ export function normalizeDemo(demo) {
     // seeding state that must exist at boot, e.g. dismissing a first-run tour.
     init: typeof demo.init === 'string' ? demo.init : null,
     auth: normalizeAuth(demo.auth),
+    // Optional: show the capture as a browser window over the animated
+    // background, instead of filling the frame. See src/backdrop.js.
+    backdrop: normalizeBackdrop(demo.backdrop, demo.url, fail),
     // Optional voiceover. When set, steps carrying `say` (and, with
     // `fromCaptions`, every caption) are narrated. See src/voice.js.
     voice: normalizeVoice(demo.voice),
     steps,
   }
+}
+
+function normalizeFormats(formats) {
+  if (formats == null) return ['landscape']
+  if (!Array.isArray(formats) || !formats.length) fail('"formats" must be a non-empty array')
+  for (const f of formats) {
+    if (!FORMAT_SIZES[f]) fail('unknown format "' + f + '". Valid: ' + Object.keys(FORMAT_SIZES).join(', '))
+  }
+  return formats
+}
+
+/** Shortest scene that still reads: under it the reveal and the fade overlap. */
+const MIN_SCENE_MS = 600
+
+function normalizeScene(i, raw) {
+  // Validate the value that ends up in the step: `preset: undefined` must not
+  // pass the check on the default and then overwrite it.
+  const preset = raw.preset == null ? DEFAULTS.scene.preset : raw.preset
+  if (!SCENE_PRESETS.includes(preset)) {
+    fail('step ' + i + ' (scene) has unknown preset "' + preset + '". Valid: ' + SCENE_PRESETS.join(', '))
+  }
+  if (preset === 'list' && (!Array.isArray(raw.items) || !raw.items.length)) {
+    fail('step ' + i + ' (scene, list) needs a non-empty "items" array')
+  }
+  const duration = raw.duration == null ? DEFAULTS.scene.duration : raw.duration
+  if (typeof duration !== 'number' || !(duration >= MIN_SCENE_MS)) {
+    fail('step ' + i + ' (scene) needs a "duration" of at least ' + MIN_SCENE_MS + ' ms')
+  }
+  return { ...raw, preset, duration, sticky: !!raw.sticky }
 }
 
 /**
@@ -161,7 +206,7 @@ export function estimateDurationMs(demo) {
     else if (s.type === 'wait') total += s.duration || 600
     else if (s.type === 'click' || s.type === 'move') total += (s.duration || 0) + 200
     else if (s.type === 'zoom' || s.type === 'zoomReset' || s.type === 'scroll') total += s.duration || 0
-    else if (s.type === 'endcard') total += s.duration || 0
+    else if (s.type === 'scene') total += s.duration || 0
     else total += 250
   }
   return total

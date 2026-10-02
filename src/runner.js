@@ -3,9 +3,16 @@
  * the polish into the same frames Playwright records. Output is a raw .webm.
  */
 import { chromium } from 'playwright'
-import { mkdir } from 'node:fs/promises'
+import { mkdir, rm } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
+import { availableParallelism } from 'node:os'
 import path from 'node:path'
-import { buildInitScript } from './overlay.js'
+import { buildInitScript, buildHeldCoverScript } from './overlay.js'
+import { buildSceneHtml, buildBackgroundHtml, FORMAT_SIZES, LOOP_SEC, assertFormats } from './scenes.js'
+import { backdropGeometry, chromeHtml, maskHtml, shadowHtml } from './backdrop.js'
+import { runFfmpeg } from './render.js'
+import { normalizeDemo } from './steps.js'
+import { detectMarkerRuns } from './marker.js'
 
 const sleep = (page, ms) => page.waitForTimeout(Math.max(0, ms | 0))
 
@@ -26,7 +33,7 @@ async function dw(page, fn, ...args) {
 /** type → async executor. Each receives (page, step, demo). */
 const EXECUTORS = {
   async caption(page, step) {
-    await dw(page, 'caption', step.text, step.hold ? 0 : step.duration)
+    await dw(page, 'caption', step.text, step.hold ? 0 : step.duration, { style: step.style, accent: step.accent })
     if (!step.hold) await sleep(page, step.duration)
   },
 
@@ -146,10 +153,17 @@ const EXECUTORS = {
     }
   },
 
-  async endcard(page, step) {
-    await dw(page, 'captionHide')
-    await dw(page, 'endcard', step.title, step.subtitle || '', step.duration)
+  // The page is covered while the scene runs; the render stage finds the cover by
+  // its marker and swaps it for the scene recorded at each format's size. Once a
+  // sticky scene (the end card) has run, the cover stays to the end, through any
+  // later scene; so does the cover of the last step.
+  async scene(page, step, demo, { last, sceneIndex, next, held }) {
+    await dw(page, 'highlightHide')
+    await dw(page, 'cover', true, sceneIndex, step.title, step.subtitle || '')
     await sleep(page, step.duration)
+    // Back to back with another scene, the page would flash for a frame between.
+    const keep = last || step.sticky || held || (next && next.type === 'scene')
+    if (!keep) await dw(page, 'cover', false)
   },
 }
 
@@ -188,10 +202,12 @@ async function authenticate(browser, auth, viewport, { locale = null, init = nul
 }
 
 /**
- * Run a normalized demo and return { rawVideoPath }. The caller is responsible
- * for the render stage (render.js) and any cleanup of the work directory.
+ * Run a demo (raw or normalized) and return { rawVideoPath }. The caller is
+ * responsible for the render stage (render.js) and any cleanup of the work
+ * directory. `opts.signal` (an AbortSignal) stops it between two steps.
  */
-export async function runDemo(demo, opts = {}) {
+export async function runDemo(rawDemo, opts = {}) {
+  const demo = normalizeDemo(rawDemo)
   const workDir = opts.workDir || path.join(process.cwd(), '.demowright-tmp')
   await mkdir(workDir, { recursive: true })
 
@@ -214,16 +230,20 @@ export async function runDemo(demo, opts = {}) {
     ...(demo.locale ? { locale: demo.locale } : {}),
     ...(storageState ? { storageState } : {}),
   })
-  // Video recording starts when the context is created; measure timelapse
-  // ranges as second-offsets from this moment so they line up with the capture.
-  const recordStart = Date.now()
+  // The video's first frame is the new page's, not the context's: measured, the
+  // context-based clock ran 0.1-0.25 s ahead of the capture. Timelapse ranges and
+  // narration cues are second-offsets from this moment; scene cuts do not use the
+  // clock at all (see marker.js).
   const page = await context.newPage()
+  const recordStart = Date.now()
   await page.addInitScript(buildInitScript(demo.theme))
   if (demo.init) await page.addInitScript(demo.init)
 
   const log = opts.onStep || (() => {})
   const timelapses = [] // { start, end, factor } in seconds — dead waits to speed up
+  const scenes = [] // { step, opening }: in order, matched to the covers in the capture
   const narration = [] // { text, atSec } — voiceover lines, placed at step start
+  let held = null // the sticky scene whose cover stays up, once one has run
   let video
 
   try {
@@ -251,10 +271,24 @@ export async function runDemo(demo, opts = {}) {
       // A `wait` may be marked `timelapse: N` to speed that recorded span up N×
       // in the final video (e.g. waiting out a multi-minute audit).
       const tlStart = step.type === 'wait' && step.timelapse > 1 ? (Date.now() - recordStart) / 1000 : null
+      const last = i === demo.steps.length - 1
+      checkAborted(opts.signal)
+      if (step.type === 'scene') {
+        // An opening scene also replaces the page load before it, so the video
+        // starts on the scene instead of on the white frames of a loading page.
+        scenes.push({ step, opening: i === 0 })
+      }
+      const sceneIndex = scenes.length - 1
       try {
-        await exec(page, step, demo)
+        await exec(page, step, demo, { last, sceneIndex, next: demo.steps[i + 1], held })
       } catch (err) {
         throw new Error('step ' + i + ' (' + step.type + ') failed: ' + err.message)
+      }
+      // From a sticky scene on, the cover is held: later scenes keep it up, and
+      // every new page (a goto, a link, a redirect) gets the latest one back.
+      if (step.type === 'scene' && (step.sticky || held)) {
+        held = { step, sceneIndex }
+        await page.addInitScript(buildHeldCoverScript(sceneIndex, step.title, step.subtitle))
       }
       if (tlStart != null) {
         timelapses.push({ start: tlStart, end: (Date.now() - recordStart) / 1000, factor: step.timelapse })
@@ -271,5 +305,264 @@ export async function runDemo(demo, opts = {}) {
   // Only reached when the step loop completed without throwing.
   if (!video) throw new Error('[demowright] no video was recorded')
   const rawVideoPath = await video.path()
-  return { rawVideoPath, workDir, timelapses, narration }
+  return { rawVideoPath, workDir, timelapses, narration, scenes }
+}
+
+/**
+ * How many real-time recordings run at once, across every stage (scenes and the
+ * backdrop share it). Each one needs a core to keep its frame rate: on a 4-core
+ * CI runner six at once started their videos so late that the start marker was
+ * never recorded. Only the recording holds a slot: decoding and encoding run
+ * outside it.
+ */
+const RECORD_SLOTS = Math.max(1, Math.floor(cpuBudget() / 2))
+
+/**
+ * CPUs this process may use: the cgroup quota when there is one (a container on
+ * Cloud Run sees every core of the host but may use two), else the cores it can
+ * run on. DEMOWRIGHT_CPUS overrides both.
+ */
+export function cpuBudget() {
+  const env = Number(process.env.DEMOWRIGHT_CPUS)
+  if (Number.isFinite(env) && env >= 1) return env
+  return Math.min(availableParallelism(), cgroupCpus() || Infinity)
+}
+
+function cgroupCpus() {
+  try {
+    // cgroup v2: "<quota> <period>" or "max <period>". Read synchronously once, at load.
+    const [quota, period] = readFileSync('/sys/fs/cgroup/cpu.max', 'utf8').trim().split(/\s+/)
+    if (quota === 'max') return null
+    const n = Number(quota) / Number(period)
+    return Number.isFinite(n) && n > 0 ? Math.max(1, Math.floor(n)) : null
+  } catch {
+    return null
+  }
+}
+
+function limiter(n) {
+  let active = 0
+  const waiting = []
+  return async (fn) => {
+    // A freed slot is handed straight to the next waiter, never released in
+    // between: a caller arriving in that gap would make it n + 1.
+    if (active >= n) await new Promise((resolve) => waiting.push(resolve))
+    else active++
+    try {
+      return await fn()
+    } finally {
+      const next = waiting.shift()
+      if (next) next()
+      else active--
+    }
+  }
+}
+const recordSlot = limiter(RECORD_SLOTS)
+
+/**
+ * Run every job (functions returning promises); on the first failure `controller`
+ * is aborted, so the jobs not started yet are skipped, and the first error is
+ * the one thrown, once every job has settled, so the browser is never closed
+ * under a recording.
+ */
+export async function runAll(jobs, controller) {
+  let first = null
+  const results = await Promise.allSettled(
+    jobs.map((job) =>
+      Promise.resolve()
+        .then(job)
+        .catch((err) => {
+          if (!first) first = err
+          controller.abort(new Error('[demowright] stopped: another recording failed'))
+          throw err
+        })
+    )
+  )
+  if (first) throw first
+  return results.map((r) => r.value)
+}
+
+/**
+ * A controller that follows `outer` (already aborted counts too). `release()`
+ * detaches it, so a long-lived outer signal does not keep every run alive.
+ */
+export function followSignal(outer) {
+  const controller = new AbortController()
+  if (!outer) return { controller, release: () => {} }
+  if (outer.aborted) {
+    controller.abort(outer.reason)
+    return { controller, release: () => {} }
+  }
+  const relay = () => controller.abort(outer.reason)
+  outer.addEventListener('abort', relay, { once: true })
+  return { controller, release: () => outer.removeEventListener('abort', relay) }
+}
+
+/** Throw the abort reason (or a plain "stopped") when `signal` has fired. */
+export function checkAborted(signal) {
+  if (!signal || !signal.aborted) return
+  throw signal.reason instanceof Error ? signal.reason : new Error('[demowright] stopped')
+}
+
+/** Wait `ms`, or reject with the abort reason as soon as `signal` fires. */
+function waitOrAbort(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal && signal.aborted) return reject(signal.reason || new Error('[demowright] stopped'))
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(signal.reason || new Error('[demowright] stopped'))
+    }
+    const timer = setTimeout(() => {
+      if (signal) signal.removeEventListener('abort', onAbort)
+      resolve()
+    }, Math.max(0, ms))
+    if (signal) signal.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
+/** Start-marker holds tried in turn: a busy machine starts the video later. */
+const MARKER_HOLDS_MS = [500, 1500, 3500]
+
+/**
+ * Record `html` at `size` for `runMs` after its start, and return { path, offset }:
+ * where the start marker ends, the animation begins. If the marker was not
+ * recorded (the video started after it was gone), record again holding it longer.
+ */
+async function recordClip(browser, dir, size, html, runMs, label, signal, onStart) {
+  for (const [attempt, hold] of MARKER_HOLDS_MS.entries()) {
+    checkAborted(signal)
+    const clipPath = await recordSlot(async () => {
+      checkAborted(signal)
+      // Progress is reported when the recording really starts, not when queued.
+      if (onStart && attempt === 0) onStart()
+      const context = await browser.newContext({ viewport: size, deviceScaleFactor: 1, recordVideo: { dir, size }, reducedMotion: 'no-preference' })
+      try {
+        const page = await context.newPage()
+        await page.setContent(html, { waitUntil: 'load' })
+        await page.evaluate(() => document.fonts.ready)
+        await waitOrAbort(hold, signal)
+        await page.evaluate(() => document.body.classList.add('go'))
+        // A stop cuts a recording in progress short (the backdrop loop is 12 s).
+        await waitOrAbort(runMs, signal)
+        const video = page.video()
+        await context.close()
+        return video.path()
+      } finally {
+        await context.close().catch(() => {})
+      }
+    })
+    // The marker can only be at the start: decode just past the longest hold.
+    const runs = await detectMarkerRuns(clipPath, { minSec: 0, maxSec: hold / 1000 + 4 })
+    if (runs.length) return { path: clipPath, offset: runs[0].end }
+    await rm(clipPath, { force: true })
+  }
+  throw new Error('[demowright] ' + label + ': start marker not recorded, even holding it ' + MARKER_HOLDS_MS.at(-1) + ' ms')
+}
+
+/**
+ * Record every scene once per format, at that format's output size. `scenes` are
+ * the ranges matched to the capture (marker.js: { step, start, end, toEnd }),
+ * each with an optional `phase` (seconds into the background loop, see scenes.js).
+ * Clips record side by side, as many at once as the machine has cores for.
+ * `opts.signal` (an AbortSignal) skips what has not started yet.
+ * Returns, per format, one { path, offset, length } per scene (seconds): the clip
+ * is used from `offset`, the first frame after the animation started.
+ */
+export async function recordScenes(rawDemo, scenes, formats, opts = {}) {
+  const demo = normalizeDemo(rawDemo)
+  if (!scenes.length) return {}
+  return withStage('scenes', formats, opts, async ({ browser, dir, controller }) => {
+    const jobs = formats.flatMap((format) => scenes.map((sc, k) => ({ format, sc, k })))
+    const clips = await runAll(
+      jobs.map(({ format, sc, k }) => async () => {
+        const length = sc.end - sc.start
+        // A scene that runs to the end of the video does not fade out.
+        const html = buildSceneHtml(sc.step, demo.theme, length * 1000, sc.toEnd, sc.phase || 0)
+        const label = 'scene ' + (k + 1) + ' (' + format + ')'
+        const onStart = opts.onScene ? () => opts.onScene(format, k) : null
+        const clip = await recordClip(browser, dir, FORMAT_SIZES[format], html, length * 1000 + 300, label, controller.signal, onStart)
+        return { ...clip, length }
+      }),
+      controller
+    )
+    const out = {}
+    jobs.forEach((job, i) => {
+      out[job.format] = out[job.format] || []
+      out[job.format][job.k] = clips[i]
+    })
+    return out
+  })
+}
+
+/**
+ * Shared set-up of the recording stages: check the formats, make the work
+ * subdirectory, follow the caller's signal (already aborted counts too) and
+ * close the browser when done.
+ */
+async function withStage(name, formats, opts, fn) {
+  assertFormats(formats)
+  const { controller, release } = followSignal(opts.signal)
+  try {
+    checkAborted(controller.signal)
+    const dir = path.join(opts.workDir || path.join(process.cwd(), '.demowright-tmp'), name)
+    await mkdir(dir, { recursive: true })
+    const browser = await chromium.launch({ headless: true })
+    try {
+      return await fn({ browser, dir, controller })
+    } finally {
+      await browser.close()
+    }
+  } finally {
+    release()
+  }
+}
+
+/**
+ * Make what the backdrop needs, once per format: a clean LOOP_SEC loop of the
+ * background (recorded, then trimmed to the frames after its start marker) and
+ * the chrome, mask and shadow images. Formats are made side by side, sharing the
+ * recording slots with the scenes. `opts.signal` skips what has not started yet.
+ * Returns, per format, { background, chrome, mask, shadow, geometry }.
+ */
+export async function recordBackdrop(rawDemo, formats, opts = {}) {
+  const demo = normalizeDemo(rawDemo)
+  if (!demo.backdrop) return {}
+  return withStage('backdrop', formats, opts, async ({ browser, dir, controller }) => {
+    const out = {}
+    await runAll(
+      formats.map((format) => async () => {
+        const size = FORMAT_SIZES[format]
+        const geometry = backdropGeometry(format, demo.viewport, demo.backdrop)
+
+        // Still images, rendered from HTML with a transparent page.
+        const shot = async (name, html, w, h, transparent) => {
+          checkAborted(controller.signal)
+          const ctx = await browser.newContext({ viewport: { width: w, height: h }, deviceScaleFactor: 1 })
+          const page = await ctx.newPage()
+          await page.setContent(html, { waitUntil: 'load' })
+          const file = path.join(dir, format + '-' + name + '.png')
+          await page.screenshot({ path: file, omitBackground: transparent })
+          await ctx.close()
+          return file
+        }
+        const chrome = await shot('chrome', chromeHtml(geometry, demo.backdrop, demo.theme), geometry.ww, geometry.total, true)
+        const mask = await shot('mask', maskHtml(geometry), geometry.ww, geometry.total, false)
+        const shadow = await shot('shadow', shadowHtml(geometry), geometry.W, geometry.H, true)
+
+        // The background loop, recorded in real time like a scene, then cut to
+        // exactly one loop from its start (the encode runs outside the slot).
+        const label = 'backdrop (' + format + ')'
+        const onStart = opts.onBackdrop ? () => opts.onBackdrop(format) : null
+        const clip = await recordClip(browser, dir, size, buildBackgroundHtml(demo.theme), LOOP_SEC * 1000 + 400, label, controller.signal, onStart)
+        const background = path.join(dir, format + '-loop.mp4')
+        await runFfmpeg([
+          '-y', '-loglevel', 'error', '-ss', clip.offset.toFixed(3), '-i', clip.path, '-t', String(LOOP_SEC),
+          '-vf', 'fps=' + demo.fps + ',format=yuv420p', '-c:v', 'libx264', '-preset', 'medium', '-crf', '18', background,
+        ], controller.signal)
+        out[format] = { background, chrome, mask, shadow, geometry }
+      }),
+      controller
+    )
+    return out
+  })
 }

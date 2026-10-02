@@ -9,16 +9,19 @@
 import { rm } from 'node:fs/promises'
 import path from 'node:path'
 import { normalizeDemo, defineDemo, estimateDurationMs, STEP_TYPES } from './steps.js'
-import { runDemo } from './runner.js'
-import { renderVideo } from './render.js'
+import { runDemo, recordScenes, recordBackdrop, runAll, followSignal, checkAborted } from './runner.js'
+import { renderVideo, remapTime } from './render.js'
 import { synthesizeNarration } from './voice.js'
+import { detectMarkerRuns, matchScenes } from './marker.js'
+import { LOOP_SEC, assertFormats } from './scenes.js'
 
-export { defineDemo, normalizeDemo, runDemo, renderVideo, estimateDurationMs, STEP_TYPES }
+export { defineDemo, normalizeDemo, runDemo, recordScenes, recordBackdrop, renderVideo, estimateDurationMs, STEP_TYPES }
+export { detectMarkerRuns, matchScenes }
 
 /**
  * Capture a demo and render it to MP4(s).
  * @param {object} rawDemo  the demo definition ({ url, steps, ... })
- * @param {object} [opts]   { out, formats, music, workDir, keepRaw, onStep, onAuth, onVoice }
+ * @param {object} [opts]   { out, formats, music, workDir, keepRaw, signal, onStep, onAuth, onVoice, onScene, onBackdrop }
  * @returns {Promise<{ outputs: Array<{format,path}>, demo: object }>}
  */
 export async function recordDemo(rawDemo, opts = {}) {
@@ -26,28 +29,67 @@ export async function recordDemo(rawDemo, opts = {}) {
   const out = opts.out || path.join(process.cwd(), 'output', demo.name + '.mp4')
   const workDir = opts.workDir || path.join(path.dirname(out), '.demowright-tmp')
 
-  const { rawVideoPath, timelapses, narration } = await runDemo(demo, {
+  // `opts.signal` stops the whole run: the capture between two steps, the scene
+  // and backdrop recordings not started, and the render's ffmpeg.
+  const { controller: stop, release } = followSignal(opts.signal)
+  try {
+    return await record(demo, out, workDir, opts, stop)
+  } finally {
+    release()
+  }
+}
+
+async function record(demo, out, workDir, opts, stop) {
+  const formats = opts.formats && opts.formats.length ? opts.formats : demo.formats
+  // An unknown format fails now, not after the whole capture.
+  assertFormats(formats)
+
+  const { rawVideoPath, timelapses, narration, scenes } = await runDemo(demo, {
     workDir,
     onStep: opts.onStep,
     onAuth: opts.onAuth,
+    signal: stop.signal,
   })
 
-  // Synthesize voiceover (if configured) before rendering, so the lines can be
-  // muxed in at their timestamps. No-op when voice is off or there are no lines.
-  let voiceCues = []
-  if (demo.voice && narration.length) {
-    if (opts.onVoice) opts.onVoice(narration.length)
-    voiceCues = await synthesizeNarration(narration, demo.voice, workDir)
-  }
+  // Where each scene sits in the capture, read from the frames (marker.js). Over
+  // a backdrop, a scene starts its background where the window's loop is at that
+  // moment of the final video, so the background does not jump at the cuts.
+  const matched = scenes.length ? matchScenes(scenes, await detectMarkerRuns(rawVideoPath)) : []
+  const sceneRanges = matched.map((sc) => ({
+    ...sc,
+    phase: demo.backdrop ? remapTime(sc.start, timelapses) % LOOP_SEC : 0,
+  }))
+
+  // Scene clips (recorded once per format, at that format's size, now that their
+  // real length is known) and the voiceover (synthesized before rendering, so the
+  // lines can be muxed in at their timestamps) do not depend on each other.
+  const voiceLines = demo.voice && narration.length
+  if (voiceLines && opts.onVoice) opts.onVoice(narration.length)
+  // The first failure stops the recordings that have not started, and is the
+  // error reported, once everything in flight has settled.
+  const [sceneClips, voiceCues, backdropAssets] = await runAll(
+    [
+      () => recordScenes(demo, sceneRanges, formats, { workDir, onScene: opts.onScene, signal: stop.signal }),
+      () => (voiceLines ? synthesizeNarration(narration, demo.voice, workDir) : []),
+      () => recordBackdrop(demo, formats, { workDir, onBackdrop: opts.onBackdrop, signal: stop.signal }),
+    ],
+    stop
+  )
+  checkAborted(stop.signal)
 
   const outputs = await renderVideo(rawVideoPath, {
     out,
-    formats: opts.formats && opts.formats.length ? opts.formats : demo.formats,
+    formats,
     music: opts.music || demo.music,
     musicVolume: demo.musicVolume,
     fps: demo.fps,
     timelapses,
     narration: voiceCues,
+    scenes: sceneRanges,
+    sceneClips,
+    backdropAssets,
+    background: demo.theme.background,
+    signal: stop.signal,
     workDir,
   })
 

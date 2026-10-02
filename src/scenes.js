@@ -1,0 +1,225 @@
+/**
+ * Motion scenes: full-screen animated cards (an intro title, a list, an outro).
+ *
+ * A scene is a self-contained HTML page with CSS animations. It is recorded by
+ * Playwright like the product itself, once per output format at that format's
+ * exact size, so a centered title is never cropped by the square or vertical
+ * derivation. This module only builds the markup: it is browser-free, so it can
+ * be unit-tested, and the runner decides when and where to record it.
+ *
+ * The animations are paused until the runner adds `go` to <body>. Until then the
+ * page also shows the frame marker (see marker.js): the first frame without it is
+ * where the render starts using the clip, so the white frames Playwright records
+ * while the page loads never reach the video.
+ */
+import { MARKER, markerCells } from './marker.js'
+
+/** Output size of each format, in pixels. The render stage uses the same table. */
+export const FORMAT_SIZES = {
+  landscape: { width: 1280, height: 720 },
+  square: { width: 1080, height: 1080 },
+  vertical: { width: 1080, height: 1920 },
+}
+
+/** Throw on a format that is not in FORMAT_SIZES. */
+export function assertFormats(formats) {
+  for (const f of formats) {
+    if (!FORMAT_SIZES[f]) {
+      throw new Error('[demowright] unknown format "' + f + '" (use ' + Object.keys(FORMAT_SIZES).join('|') + ')')
+    }
+  }
+}
+
+export const SCENE_PRESETS = ['title', 'list', 'outro']
+
+const DEFAULT_BG = '#07070a'
+export const DEFAULT_FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif'
+
+export function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+/** Lower-case a word and strip the punctuation around it, for accent matching. */
+const bare = (w) => w.toLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '')
+
+/** The words of `text` to colour with the accent: any word that appears in `accent`. */
+export function accentSet(accent) {
+  return new Set(String(accent || '').split(/\s+/).map(bare).filter(Boolean))
+}
+
+/** `text` as one span per word, each with its reveal delay (ms). */
+function words(text, accent, startMs, stepMs) {
+  const acc = accentSet(accent)
+  return String(text)
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((w, i) => {
+      const cls = acc.has(bare(w)) ? 'w a' : 'w'
+      return '<span class="' + cls + '" style="animation-delay:' + (startMs + i * stepMs) + 'ms">' + escapeHtml(w) + '</span>'
+    })
+    .join(' ')
+}
+
+/** Deterministic pseudo-random numbers, so a re-render is identical. */
+function rand(seed) {
+  const x = Math.sin(seed * 127.1 + 311.7) * 43758.5453
+  return x - Math.floor(x)
+}
+
+function particles(n) {
+  let out = ''
+  for (let i = 0; i < n; i++) {
+    // Every particle lives exactly one loop and fades at both ends, so the jump
+    // back to its start is never seen and the background loops without a seam.
+    const style =
+      'left:' + (rand(i + 1) * 100).toFixed(2) + '%;' +
+      'top:' + (rand(i + 101) * 100).toFixed(2) + '%;' +
+      'width:calc(' + (2 + rand(i + 201) * 3).toFixed(1) + ' * var(--u));' +
+      '--o:' + (0.1 + rand(i + 301) * 0.25).toFixed(2) + ';' +
+      '--d:-' + (10 + rand(i + 401) * 20).toFixed(1) + 'vh;' +
+      'animation-delay:calc(-' + (rand(i + 501) * LOOP_SEC).toFixed(2) + 's - var(--ph))'
+    out += '<i class="p" style="' + style + '"></i>'
+  }
+  return out
+}
+
+function itemsHtml(items, startMs) {
+  return items
+    .map((it, i) => {
+      const label = typeof it === 'string' ? it : it.label
+      const hint = typeof it === 'string' ? '' : it.hint
+      return (
+        '<div class="item" style="animation-delay:' + (startMs + i * 140) + 'ms">' +
+        '<span class="dot"></span>' +
+        '<span class="txt"><b>' + escapeHtml(label) + '</b>' +
+        (hint ? '<small>' + escapeHtml(hint) + '</small>' : '') +
+        '</span></div>'
+      )
+    })
+    .join('')
+}
+
+function subtitle(scene, delayMs) {
+  if (!scene.subtitle) return ''
+  return '<p class="sub" style="animation-delay:' + delayMs + 'ms">' + escapeHtml(scene.subtitle) + '</p>'
+}
+
+function body(scene) {
+  const titleWords = String(scene.title).split(/\s+/).filter(Boolean).length
+  if (scene.preset === 'outro') {
+    return '<h1 class="outro">' + escapeHtml(scene.title) + '</h1>' + subtitle(scene, 520)
+  }
+  if (scene.preset === 'list') {
+    const after = 200 + titleWords * 90 + 160
+    return (
+      '<h2>' + words(scene.title, scene.accent, 200, 90) + '</h2>' +
+      subtitle(scene, after) +
+      '<div class="items">' + itemsHtml(scene.items || [], after + (scene.subtitle ? 260 : 0)) + '</div>'
+    )
+  }
+  return '<h1>' + words(scene.title, scene.accent, 200, 110) + '</h1>' + subtitle(scene, 320 + titleWords * 110)
+}
+
+/**
+ * Full HTML document for one scene.
+ * @param {object} scene  normalized scene step ({ preset, title, subtitle?, accent?, items? })
+ * @param {object} theme  demo theme ({ accent?, font?, background? })
+ * @param {number} durationMs  how long the scene lasts in the final video
+ * @param {boolean} last  the last scene of the video does not fade out
+ * @param {number} [phaseSec]  where in its loop the background starts (see backgroundCss)
+ */
+export function buildSceneHtml(scene, theme, durationMs, last, phaseSec = 0) {
+  const t = theme || {}
+  const exitAt = Math.max(0, durationMs - 450)
+  const exit = last ? '' : '.stage{animation:dw-out 420ms ease ' + exitAt + 'ms forwards}'
+
+  const css = backgroundCss(t, phaseSec) + `
+body:not(.go) *{animation-play-state:paused!important}
+.stage{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:calc(26*var(--u));padding:0 7vw;text-align:center}
+h1,h2{font-weight:800;letter-spacing:-.02em;line-height:1.1}
+h1{font-size:calc(86*var(--u));max-width:92vw}
+h2{font-size:calc(60*var(--u))}
+.w{display:inline-block;opacity:0;animation:dw-word 640ms var(--ease) forwards}
+.a{color:var(--accent)}
+.sub{font-size:calc(30*var(--u));font-weight:600;color:var(--accent);opacity:0;animation:dw-rise 600ms var(--ease) forwards}
+.outro{font-size:calc(100*var(--u));opacity:0;animation:dw-pop 900ms var(--ease) 120ms forwards}
+.items{display:flex;flex-direction:column;gap:calc(16*var(--u));width:min(88vw,calc(820*var(--u)));margin-top:calc(10*var(--u))}
+.item{display:flex;align-items:center;gap:calc(22*var(--u));text-align:left;padding:calc(20*var(--u)) calc(28*var(--u));border-radius:calc(20*var(--u));background:linear-gradient(120deg,#1b1b22,#121217);border:1px solid rgba(255,255,255,.1);box-shadow:0 calc(16*var(--u)) calc(40*var(--u)) rgba(0,0,0,.45);opacity:0;animation:dw-slide 620ms var(--ease) forwards}
+.dot{flex:none;width:calc(12*var(--u));aspect-ratio:1;border-radius:50%;background:var(--accent);box-shadow:0 0 calc(14*var(--u)) var(--accent)}
+.txt b{display:block;font-size:calc(30*var(--u));font-weight:700}
+.txt small{display:block;font-size:calc(22*var(--u));color:#a0a9b7;margin-top:calc(4*var(--u))}
+@keyframes dw-word{from{opacity:0;filter:blur(10px);transform:translateY(.35em)}to{opacity:1;filter:blur(0);transform:none}}
+@keyframes dw-rise{from{opacity:0;transform:translateY(calc(20*var(--u)))}to{opacity:1;transform:none}}
+@keyframes dw-slide{from{opacity:0;transform:translateX(calc(-60*var(--u)))}to{opacity:1;transform:none}}
+@keyframes dw-pop{from{opacity:0;filter:blur(14px);transform:scale(.86)}to{opacity:1;filter:blur(0);transform:none}}
+@keyframes dw-out{to{opacity:0;transform:translateY(calc(-26*var(--u)))}}
+${exit}`
+
+  return (
+    '<!doctype html><html><head><meta charset="utf-8"><style>' + css + '</style></head><body>' +
+    backgroundMarkup() +
+    '<main class="stage">' + body(scene) + '</main>' +
+    markerMarkup() +
+    '</body></html>'
+  )
+}
+
+/** Length of one background loop: every background animation repeats within it. */
+export const LOOP_SEC = 12
+
+/**
+ * CSS of the shared animated background (and the page basics). Every animation
+ * period divides LOOP_SEC, so a LOOP_SEC recording repeats with no visible seam.
+ * `phaseSec` starts the background that far into its loop: a scene shown over a
+ * backdrop picks the background up where the window's loop is at that moment.
+ */
+export function backgroundCss(theme, phaseSec = 0) {
+  const t = theme || {}
+  const accent = t.accent || '#e91e63'
+  const bg = t.background || DEFAULT_BG
+  const font = t.font || DEFAULT_FONT
+  return `
+:root{--u:calc(min(100vw,100vh)/1080);--accent:${accent};--bg:${bg};--ease:cubic-bezier(0.22,0.61,0.36,1);--ph:${(+phaseSec || 0).toFixed(3)}s}
+*{box-sizing:border-box;margin:0}
+html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:#f5f7fa;font-family:${font}}
+.mk{position:fixed;left:0;top:0;display:flex;z-index:9}.mk i{width:${MARKER.cell}px;height:${MARKER.cell}px}
+body.go .mk{display:none}
+.bg,.grid,.vig{position:absolute;inset:0}
+.blob{position:absolute;width:85vmax;height:85vmax;border-radius:50%;animation:dw-drift ${LOOP_SEC / 2}s ease-in-out infinite alternate;animation-delay:calc(0s - var(--ph))}
+.b1{left:45%;top:-30%;background:radial-gradient(circle,color-mix(in srgb,var(--accent) 30%,transparent) 0%,transparent 65%)}
+.b2{left:-35%;top:25%;background:radial-gradient(circle,rgba(124,58,237,.22) 0%,transparent 65%);animation-delay:calc(-2s - var(--ph))}
+.b3{left:20%;top:55%;background:radial-gradient(circle,rgba(37,99,235,.16) 0%,transparent 65%);animation-delay:calc(-4s - var(--ph))}
+.grid{background-image:linear-gradient(rgba(255,255,255,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.04) 1px,transparent 1px);background-size:calc(72*var(--u)) calc(72*var(--u));animation:dw-grid ${LOOP_SEC}s linear infinite;animation-delay:calc(0s - var(--ph));-webkit-mask-image:radial-gradient(ellipse at 50% 50%,#000 20%,transparent 75%)}
+.p{position:absolute;aspect-ratio:1;border-radius:50%;background:#fff;opacity:0;animation:dw-float ${LOOP_SEC}s linear infinite}
+.vig{background:radial-gradient(ellipse at 50% 50%,transparent 45%,rgba(0,0,0,.6) 100%)}
+@keyframes dw-drift{to{transform:translate(8vw,6vh) scale(1.08)}}
+@keyframes dw-grid{to{background-position:calc(-360*var(--u)) calc(-216*var(--u))}}
+@keyframes dw-float{0%{opacity:0;transform:none}15%,85%{opacity:var(--o)}100%{opacity:0;transform:translateY(var(--d))}}`
+}
+
+/** Markup of the shared animated background. */
+export function backgroundMarkup() {
+  return (
+    '<div class="bg"><div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div></div>' +
+    '<div class="grid"></div>' + particles(36) + '<div class="vig"></div>'
+  )
+}
+
+/** The start marker, shown until the page gets `go`. */
+function markerMarkup() {
+  return '<div class="mk">' + markerCells(0).map((c) => '<i style="background:' + c + '"></i>').join('') + '</div>'
+}
+
+/** The background alone, to loop behind the capture (see backdrop.js). */
+export function buildBackgroundHtml(theme) {
+  return (
+    '<!doctype html><html><head><meta charset="utf-8"><style>' + backgroundCss(theme) +
+    'body:not(.go) *{animation-play-state:paused!important}</style></head><body>' +
+    backgroundMarkup() + markerMarkup() + '</body></html>'
+  )
+}

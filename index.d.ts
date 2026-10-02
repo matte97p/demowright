@@ -11,7 +11,13 @@ export interface Theme {
   accent?: string
   /** CSS font-family stack for overlay text. */
   font?: string
+  /** Base colour of motion scenes (default #07070a). */
+  background?: string
 }
+
+export type ScenePreset = 'title' | 'list' | 'outro'
+
+export type SceneItem = string | { label: string; hint?: string }
 
 export interface AuthField {
   selector: string
@@ -63,7 +69,16 @@ interface Narratable {
 }
 
 export type Step =
-  | (Narratable & { type: 'caption'; text: string; duration?: number; hold?: boolean })
+  | (Narratable & {
+      type: 'caption'
+      text: string
+      duration?: number
+      hold?: boolean
+      /** 'words' reveals the caption word by word. */
+      style?: 'bar' | 'words'
+      /** Words of `text` drawn in the theme accent. */
+      accent?: string
+    })
   | (Narratable & { type: 'captionHide' })
   | (Narratable & { type: 'goto'; url: string })
   | (Narratable & { type: 'move'; selector?: string; x?: number; y?: number; duration?: number })
@@ -86,9 +101,30 @@ export type Step =
   | (Narratable & { type: 'zoomReset'; duration?: number })
   | (Narratable & { type: 'scroll'; selector?: string; y?: number; duration?: number })
   | (Narratable & { type: 'wait'; duration?: number; selector?: string; timeout?: number; timelapse?: number })
+  | (Narratable & {
+      type: 'scene'
+      title: string
+      preset?: ScenePreset
+      subtitle?: string
+      /** Words of `title` drawn in the theme accent. */
+      accent?: string
+      /** Required by the 'list' preset. */
+      items?: SceneItem[]
+      duration?: number
+    })
+  /** Shorthand for a scene with preset 'outro'. */
   | (Narratable & { type: 'endcard'; title: string; subtitle?: string; duration?: number })
 
 export type Format = 'landscape' | 'square' | 'vertical'
+
+export interface Backdrop {
+  /** 'browser' draws an address bar; 'none' just the rounded window. */
+  frame?: 'browser' | 'none'
+  /** Share of the frame the window takes, 0.5 to 1 (default 0.86). */
+  scale?: number
+  /** Address bar text; defaults to the host of the demo url. */
+  url?: string
+}
 
 export interface Demo {
   name?: string
@@ -96,6 +132,8 @@ export interface Demo {
   url: string
   viewport?: Viewport
   theme?: Theme
+  /** Show the capture as a window over the animated background. */
+  backdrop?: boolean | Backdrop
   /** Background music track (path). */
   music?: string | null
   /** Music level, 0–1 (default 0.18). */
@@ -113,6 +151,8 @@ export interface Demo {
 }
 
 export interface RecordOptions {
+  /** Stops the run: the capture between two steps, recordings not started yet. */
+  signal?: AbortSignal
   out?: string
   formats?: Format[]
   music?: string
@@ -121,6 +161,10 @@ export interface RecordOptions {
   onStep?: (i: number, step: Step) => void
   onAuth?: () => void
   onVoice?: (lineCount: number) => void
+  /** Called before each scene recording (one per scene per format). */
+  onScene?: (format: Format, sceneIndex: number) => void
+  /** Called before the backdrop of each format is made. */
+  onBackdrop?: (format: Format) => void
 }
 
 export interface Output {
@@ -134,19 +178,79 @@ export interface Timelapse {
   factor: number
 }
 
+/** A scene step of a capture, in order (what runDemo returns). */
+export interface SceneStep {
+  step: Step
+  /** The first step of the demo: the scene also replaces the page load. */
+  opening: boolean
+}
+
+/** A stretch of the capture replaced by a scene, in seconds, read from the frames. */
+export interface SceneRange extends SceneStep {
+  start: number
+  end: number
+  /** The scene runs to the end of the capture. */
+  toEnd: boolean
+  /** Seconds into the background loop where the scene's background starts. */
+  phase?: number
+}
+
+/** One cover found in a video: marker 0 or 1, in seconds. */
+export interface MarkerRun {
+  marker: 0 | 1
+  start: number
+  end: number
+  toEnd: boolean
+}
+
+/** One recorded scene clip: used from `offset`, for `length` seconds. */
+export interface SceneClip {
+  path: string
+  offset: number
+  length: number
+}
+
 export function defineDemo(demo: Demo): Demo
 
 export function recordDemo(demo: Demo, opts?: RecordOptions): Promise<{ outputs: Output[]; demo: Demo }>
 
 export function runDemo(
   demo: Demo,
-  opts?: { workDir?: string; onStep?: (i: number, step: Step) => void; onAuth?: () => void }
+  opts?: { workDir?: string; onStep?: (i: number, step: Step) => void; onAuth?: () => void; signal?: AbortSignal }
 ): Promise<{
   rawVideoPath: string
   workDir: string
   timelapses: Timelapse[]
   narration: Array<{ text: string; atSec: number }>
+  scenes: SceneStep[]
 }>
+
+export interface BackdropAssets {
+  background: string
+  chrome: string
+  mask: string
+  shadow: string
+  geometry: { W: number; H: number; ww: number; wh: number; hb: number; total: number; x: number; y: number; radius: number }
+}
+
+export function recordBackdrop(
+  demo: Demo,
+  formats: Format[],
+  opts?: { workDir?: string; onBackdrop?: (format: Format) => void; signal?: AbortSignal }
+): Promise<Partial<Record<Format, BackdropAssets>>>
+
+/** Find the scene covers in a capture, from its frames. */
+export function detectMarkerRuns(file: string, opts?: { maxGapSec?: number; minSec?: number }): Promise<MarkerRun[]>
+
+/** Pair scene steps with the covers found in the capture. Throws on a mismatch. */
+export function matchScenes(scenes: SceneStep[], runs: MarkerRun[]): SceneRange[]
+
+export function recordScenes(
+  demo: Demo,
+  scenes: SceneRange[],
+  formats: Format[],
+  opts?: { workDir?: string; onScene?: (format: Format, sceneIndex: number) => void; signal?: AbortSignal }
+): Promise<Partial<Record<Format, SceneClip[]>>>
 
 export function renderVideo(
   rawVideoPath: string,
@@ -159,11 +263,23 @@ export function renderVideo(
     workDir?: string
     timelapses?: Timelapse[]
     narration?: Array<{ path: string; atSec: number }>
+    /** The scene ranges; pass [] to skip looking for covers in a capture without scenes. */
+    scenes?: SceneRange[]
+    sceneClips?: Partial<Record<Format, SceneClip[]>>
+    /** Colour painted over the markers of covers rendered without clips. */
+    background?: string
+    /** From recordBackdrop: per format, the background loop and the window images. */
+    backdropAssets?: Partial<Record<Format, BackdropAssets>>
+    /** Kills the running ffmpeg and rejects with the abort reason. */
+    signal?: AbortSignal
   }
 ): Promise<Output[]>
 
-export function normalizeDemo(demo: Demo): Required<Omit<Demo, 'theme' | 'music' | 'locale' | 'init' | 'auth' | 'voice'>> &
-  Pick<Demo, 'theme' | 'music' | 'locale' | 'init' | 'auth' | 'voice'>
+export function normalizeDemo(demo: Demo): Required<Omit<Demo, 'theme' | 'music' | 'locale' | 'init' | 'auth' | 'voice' | 'backdrop'>> &
+  Pick<Demo, 'theme' | 'music' | 'locale' | 'init' | 'auth' | 'voice'> & {
+    /** null when off; otherwise every field filled in. */
+    backdrop: Required<Backdrop> | null
+  }
 
 export function estimateDurationMs(demo: Demo): number
 

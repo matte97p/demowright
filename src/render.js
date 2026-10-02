@@ -11,29 +11,130 @@ import { spawn } from 'node:child_process'
 import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 import ffmpegPath from 'ffmpeg-static'
+import { FORMAT_SIZES, assertFormats } from './scenes.js'
+import { MARKER, detectMarkerRuns } from './marker.js'
+import { backdropChain } from './backdrop.js'
 
-/** Video-filter graph per format. `[v]` is the labelled final video pad. */
+/**
+ * Video-filter graph per format, sized from FORMAT_SIZES (the table the scenes
+ * and the backdrop use too). `[v]` is the labelled final video pad.
+ */
+const size = (f) => FORMAT_SIZES[f].width + ':' + FORMAT_SIZES[f].height
 const FILTERS = {
   landscape:
-    '[0:v]scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1[v]',
-  square: '[0:v]crop=ih:ih:(iw-ih)/2:0,scale=1080:1080,setsar=1[v]',
+    '[0:v]scale=' + size('landscape') + ':force_original_aspect_ratio=decrease,pad=' + size('landscape') + ':(ow-iw)/2:(oh-ih)/2,setsar=1[v]',
+  square: '[0:v]crop=ih:ih:(iw-ih)/2:0,scale=' + size('square') + ',setsar=1[v]',
   vertical:
     '[0:v]split=2[bg][fg];' +
-    '[bg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=24:4[bgb];' +
-    '[fg]scale=1080:-2[fgs];' +
+    '[bg]scale=' + size('vertical') + ':force_original_aspect_ratio=increase,crop=' + size('vertical') + ',boxblur=24:4[bgb];' +
+    '[fg]scale=' + FORMAT_SIZES.vertical.width + ':-2[fgs];' +
     '[bgb][fgs]overlay=(W-w)/2:(H-h)/2,setsar=1[v]',
 }
 
-function runFfmpeg(args) {
+const DEFAULT_BG_HEX = '0x07070a'
+
+/**
+ * A CSS colour as ffmpeg wants it (0xRRGGBB): #rgb, #rrggbb, #rrggbbaa and
+ * rgb()/rgba() are converted; anything else (a name, hsl()) falls back to the
+ * default background, so a theme colour can never break the filter graph.
+ */
+export function ffmpegColor(css) {
+  const c = String(css || '').trim().toLowerCase()
+  let m = c.match(/^#([0-9a-f]{3})$/)
+  if (m) return '0x' + m[1].split('').map((d) => d + d).join('')
+  m = c.match(/^#([0-9a-f]{6})([0-9a-f]{2})?$/)
+  if (m) return '0x' + m[1]
+  m = c.match(/^rgba?\(\s*(\d{1,3})[\s,]+(\d{1,3})[\s,]+(\d{1,3})/)
+  if (m) return '0x' + m.slice(1, 4).map((n) => Math.min(255, +n).toString(16).padStart(2, '0')).join('')
+  return DEFAULT_BG_HEX
+}
+
+/**
+ * Video graph for one format, with the scene stretches of the capture replaced by
+ * the scene clips recorded at that format's size. Pure, so it can be tested.
+ *
+ * `segments` are { start, end, input, offset, toEnd? } in seconds on the source
+ * timeline (`toEnd` marks a closing scene that runs to the end of the capture):
+ * `input` is the ffmpeg input index of the scene clip, `offset` where its
+ * animation starts. The replaced stretch and the clip have the same length, so
+ * the timeline (and every narration cue placed on it) does not move.
+ * `backdrop` ({ geometry, inputs }, see backdrop.js) puts the capture in a window
+ * over the animated background instead of cropping it.
+ * `masks` ({ start, end } in seconds) are scene covers left in place because no
+ * clip was recorded for them: their marker cells are painted over with
+ * `background`, and the plain card the overlay drew stays.
+ * Returns the filter parts; the final video pad is labelled [v].
+ */
+export function buildVideoGraph(format, segments, fps, { masks = [], background, backdrop = null } = {}) {
+  assertFormats([format])
+  const box = 'drawbox=x=0:y=0:w=' + 2 * MARKER.cell + ':h=' + MARKER.cell + ':color=' + ffmpegColor(background) + ':t=fill'
+  const paint = masks.map((m) => box + ":enable='between(t," + m.start.toFixed(3) + ',' + m.end.toFixed(3) + ")'").join(',')
+  // With a backdrop the capture sits in a window over the background; without,
+  // it is cropped to the format.
+  const crop = backdrop
+    ? backdropChain(backdrop.geometry, backdrop.inputs, fps, paint)
+    : paint
+      ? FILTERS[format].replace('[0:v]', '[0:v]' + paint + ',')
+      : FILTERS[format]
+  const segs = (segments || []).filter((sg) => sg.end > sg.start).sort((a, b) => a.start - b.start)
+  if (!segs.length) return [crop]
+
+  const { width, height } = FORMAT_SIZES[format]
+  const minPiece = 1 / fps
+  const pieces = [] // { kind: 'capture', start, end? } | { kind: 'scene', seg }
+  let cursor = 0
+  for (const sg of segs) {
+    if (sg.start - cursor >= minPiece) pieces.push({ kind: 'capture', start: cursor, end: sg.start })
+    pieces.push({ kind: 'scene', seg: sg })
+    cursor = Math.max(cursor, sg.end)
+  }
+  // A closing scene runs to the end of the capture, so there is no tail after it.
+  if (!segs[segs.length - 1].toEnd) pieces.push({ kind: 'capture', start: cursor, end: null })
+
+  const captures = pieces.filter((pc) => pc.kind === 'capture')
+  const parts = []
+  if (captures.length) {
+    const split = captures.length > 1 ? ',split=' + captures.length : ''
+    const outs = captures.map((_, j) => '[c' + j + ']').join('')
+    parts.push(crop.replace(/\[v\]$/, ',fps=' + fps + ',format=yuv420p' + split + outs))
+  }
+  const labels = []
+  let c = 0
+  pieces.forEach((pc, j) => {
+    if (pc.kind === 'capture') {
+      const range = 'start=' + pc.start.toFixed(3) + (pc.end == null ? '' : ':end=' + pc.end.toFixed(3))
+      parts.push('[c' + c + ']trim=' + range + ',setpts=PTS-STARTPTS[p' + j + ']')
+      c++
+    } else {
+      const sg = pc.seg
+      parts.push(
+        '[' + sg.input + ':v]trim=start=' + sg.offset.toFixed(3) + ':duration=' + (sg.end - sg.start).toFixed(3) +
+          ',setpts=PTS-STARTPTS,scale=' + width + ':' + height + ':force_original_aspect_ratio=increase,crop=' +
+          width + ':' + height + ',fps=' + fps + ',setsar=1,format=yuv420p[p' + j + ']'
+      )
+    }
+    labels.push('[p' + j + ']')
+  })
+  parts.push(labels.join('') + 'concat=n=' + labels.length + ':v=1:a=0[v]')
+  return parts
+}
+
+/** Run ffmpeg; an aborted `signal` kills it and rejects with the abort reason. */
+export function runFfmpeg(args, signal) {
   return new Promise((resolve, reject) => {
+    if (signal && signal.aborted) return reject(signal.reason || new Error('[demowright] stopped'))
     const proc = spawn(ffmpegPath, args, { stdio: ['ignore', 'ignore', 'pipe'] })
+    const kill = () => proc.kill('SIGKILL')
+    if (signal) signal.addEventListener('abort', kill, { once: true })
+    proc.on('close', () => signal && signal.removeEventListener('abort', kill))
     let stderr = ''
     proc.stderr.on('data', (d) => {
       stderr += d.toString()
     })
     proc.on('error', reject)
     proc.on('close', (code) => {
-      if (code === 0) resolve()
+      if (signal && signal.aborted) reject(signal.reason || new Error('[demowright] stopped'))
+      else if (code === 0) resolve()
       else reject(new Error('ffmpeg exited ' + code + '\n' + stderr.split('\n').slice(-12).join('\n')))
     })
   })
@@ -88,7 +189,7 @@ export function remapTime(t, timelapses) {
  * path to a new intermediate video; the format crops then run on top of it. With
  * no ranges, the original path is returned untouched.
  */
-async function applyTimelapse(rawVideoPath, timelapses, workDir, fps) {
+async function applyTimelapse(rawVideoPath, timelapses, workDir, fps, signal) {
   const ranges = (timelapses || [])
     .filter((t) => t && t.factor > 1 && t.end > t.start)
     .sort((a, b) => a.start - b.start)
@@ -125,7 +226,7 @@ async function applyTimelapse(rawVideoPath, timelapses, workDir, fps) {
     '-filter_complex', filter, '-map', '[v]',
     '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'medium', '-crf', '18',
     '-r', String(fps), out,
-  ])
+  ], signal)
   return out
 }
 
@@ -192,7 +293,8 @@ export async function renderVideo(rawVideoPath, opts = {}) {
 
   // Speed up the marked dead-wait ranges once, up front; the format crops then
   // run on top of the time-lapsed intermediate.
-  const source = await applyTimelapse(rawVideoPath, opts.timelapses, workDir, fps)
+  const signal = opts.signal
+  const source = await applyTimelapse(rawVideoPath, opts.timelapses, workDir, fps, signal)
 
   // Narration cues, with timestamps remapped onto the (post-timelapse) timeline.
   const cues = (opts.narration || []).map((c) => ({
@@ -204,19 +306,57 @@ export async function renderVideo(rawVideoPath, opts = {}) {
   const musicVolume = opts.musicVolume == null ? 0.18 : opts.musicVolume
   // Capture length caps the output (so looped music / late narration don't run
   // past the video) and positions the music tail-fade.
-  const durationSec = hasMusic || hasVoice ? await probeDurationSec(source) : null
+  // The backdrop loops forever, so with it the length must always be capped.
+  const hasBackdrop = !!(opts.backdropAssets && Object.keys(opts.backdropAssets).length)
+  const durationSec = hasMusic || hasVoice || hasBackdrop ? await probeDurationSec(source) : null
+
+  // Scene stretches, moved onto the (post-timelapse) timeline like the cues.
+  const onTimeline = (sc) => ({
+    start: remapTime(sc.start, opts.timelapses),
+    end: remapTime(sc.end, opts.timelapses),
+    toEnd: !!sc.toEnd,
+  })
+  const sceneRanges = (opts.scenes || []).map(onTimeline)
+  // Called without scene clips (runDemo + renderVideo by hand): find the covers
+  // anyway, so their markers can be painted over and the plain cards stay clean.
+  // Skipped when the caller says there are no scenes (`scenes: []`): it is a
+  // decode of the whole capture.
+  // Decided per format (a caller may pass clips for some formats only), and the
+  // decode runs at most once.
+  const mayHaveCovers = !(Array.isArray(opts.scenes) && !opts.scenes.length)
+  let coverRuns = null
+  const masksFor = async (clipCount) => {
+    if (clipCount || !mayHaveCovers) return []
+    if (!coverRuns) coverRuns = (await detectMarkerRuns(rawVideoPath)).map(onTimeline)
+    return coverRuns
+  }
 
   const results = []
   for (const format of formats) {
-    const vfilter = FILTERS[format]
-    if (!vfilter) throw new Error('[demowright] unknown format "' + format + '" (use landscape|square|vertical)')
     const out = outPathFor(base, format, formats)
 
     const args = ['-y', '-loglevel', 'error', '-i', source]
     if (hasMusic) args.push('-stream_loop', '-1', '-i', opts.music)
     for (const c of cues) args.push('-i', c.path)
 
-    const parts = [vfilter]
+    // Scene clips go last, after music and narration, so the audio indices hold.
+    const clips = (opts.sceneClips && opts.sceneClips[format]) || []
+    const sceneInput = 1 + (hasMusic ? 1 : 0) + cues.length
+    for (const clip of clips) args.push('-i', clip.path)
+    const segments = clips.map((clip, k) => ({ ...sceneRanges[k], input: sceneInput + k, offset: clip.offset }))
+
+    // Backdrop inputs go after the scene clips: the looping background, then the
+    // three still images (single frames, which overlay repeats).
+    let backdrop = null
+    const assets = opts.backdropAssets && opts.backdropAssets[format]
+    if (assets) {
+      const at = sceneInput + clips.length
+      args.push('-stream_loop', '-1', '-i', assets.background, '-i', assets.chrome, '-i', assets.mask, '-i', assets.shadow)
+      backdrop = { geometry: assets.geometry, inputs: { bg: at, chrome: at + 1, mask: at + 2, shadow: at + 3 } }
+    }
+
+    const masks = await masksFor(clips.length)
+    const parts = buildVideoGraph(format, segments, fps, { masks, background: opts.background, backdrop })
     const audioLabel = buildAudioGraph(parts, {
       hasMusic,
       musicVolume,
@@ -239,10 +379,10 @@ export async function renderVideo(rawVideoPath, opts = {}) {
     // Cap to the capture length when known; otherwise fall back to -shortest so
     // infinitely-looped music can't run forever.
     if (durationSec) args.push('-t', durationSec.toFixed(3))
-    else if (hasMusic) args.push('-shortest')
+    else if (hasMusic || backdrop) args.push('-shortest')
     args.push(out)
 
-    await runFfmpeg(args)
+    await runFfmpeg(args, signal)
     results.push({ format, path: out })
   }
   return results

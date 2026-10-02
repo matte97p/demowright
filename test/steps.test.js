@@ -136,3 +136,70 @@ test('estimateDurationMs grows with content and is roughly additive', () => {
   assert.ok(big > small)
   assert.ok(small >= 700, 'includes the intro settle')
 })
+
+test('a scene defaults to the title preset', () => {
+  const d = normalizeDemo({ url: 'x', steps: [{ type: 'scene', title: 'Hi' }] })
+  assert.equal(d.steps[0].preset, 'title')
+  assert.equal(d.steps[0].duration, 2800)
+})
+
+test('a scene with an unknown preset is rejected', () => {
+  assert.throws(
+    () => normalizeDemo({ url: 'x', steps: [{ type: 'scene', title: 'Hi', preset: 'confetti' }] }),
+    /unknown preset "confetti"/
+  )
+})
+
+test('a list scene needs items', () => {
+  assert.throws(
+    () => normalizeDemo({ url: 'x', steps: [{ type: 'scene', title: 'Hi', preset: 'list' }] }),
+    /needs a non-empty "items" array/
+  )
+})
+
+test('the end card becomes a sticky outro scene, keeping its fields', () => {
+  const d = normalizeDemo({ url: 'x', steps: [{ type: 'endcard', title: 'App', subtitle: 'app.com', duration: 2000 }] })
+  const s = d.steps[0]
+  assert.deepEqual(
+    { type: s.type, preset: s.preset, title: s.title, subtitle: s.subtitle, duration: s.duration, sticky: s.sticky },
+    { type: 'scene', preset: 'outro', title: 'App', subtitle: 'app.com', duration: 2000, sticky: true }
+  )
+})
+
+test('an explicit scene is not sticky', () => {
+  const d = normalizeDemo({ url: 'x', steps: [{ type: 'scene', title: 'Hi' }] })
+  assert.equal(d.steps[0].sticky, false)
+})
+
+test('an undefined preset falls back to the default instead of overwriting it', () => {
+  const d = normalizeDemo({ url: 'x', steps: [{ type: 'scene', title: 'Hi', preset: undefined }] })
+  assert.equal(d.steps[0].preset, 'title')
+})
+
+test('a scene too short to read is rejected', () => {
+  assert.throws(
+    () => normalizeDemo({ url: 'x', steps: [{ type: 'scene', title: 'Hi', duration: 0 }] }),
+    /at least 600 ms/
+  )
+})
+
+test('a caption style must be one of the known ones', () => {
+  assert.throws(
+    () => normalizeDemo({ url: 'x', steps: [{ type: 'caption', text: 'hi', style: 'neon' }] }),
+    /unknown style "neon"/
+  )
+  assert.doesNotThrow(() => normalizeDemo({ url: 'x', steps: [{ type: 'caption', text: 'hi', style: 'words' }] }))
+})
+
+test('scenes count toward the estimated length', () => {
+  const d = normalizeDemo({ url: 'x', steps: [{ type: 'scene', title: 'Hi', duration: 3000 }] })
+  assert.equal(estimateDurationMs(d), 3700)
+})
+
+test('an unknown format is rejected before anything is recorded', () => {
+  assert.throws(
+    () => normalizeDemo({ url: 'x', formats: ['portrait'], steps: [{ type: 'caption', text: 'x' }] }),
+    /unknown format "portrait"/
+  )
+  assert.throws(() => normalizeDemo({ url: 'x', formats: [], steps: [{ type: 'caption', text: 'x' }] }), /non-empty array/)
+})

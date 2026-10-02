@@ -32,3 +32,26 @@ jobs:
 
       - name: Tests
         run: npm test
+
+  # Scenes and the backdrop are recorded in real time: this renders the motion
+  # example and counts the frames the runner dropped (scripts/frame-check.mjs).
+  # Above 15% the real-time capture is not good enough on CI hardware, and scenes
+  # should move to a deterministic, frame-stepped capture.
+  frame-check:
+    name: Frame check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Install
+        run: npm install --no-audit --no-fund --prefer-offline
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Render and measure
+        run: node scripts/frame-check.mjs examples/scenes.config.js --max-dup-percent 15

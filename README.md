@@ -55,7 +55,7 @@ Run it and you get `output/demo.mp4` — captions, cursor, and zooms baked in.
 
 | type | fields | what it does |
 |---|---|---|
-| `caption` | `text`, `duration?`, `hold?` | show a caption (bottom center). `hold: true` keeps it until `captionHide` |
+| `caption` | `text`, `duration?`, `hold?`, `style?`, `accent?` | show a caption (bottom center). `hold: true` keeps it until `captionHide`. `style: 'words'` reveals it word by word, with the words in `accent` in the theme colour |
 | `captionHide` | — | hide the current caption |
 | `goto` | `url` | navigate mid-demo (overlay re-installs automatically) |
 | `move` | `selector` \| `x`+`y`, `duration?` | glide the synthetic cursor |
@@ -68,7 +68,8 @@ Run it and you get `output/demo.mp4` — captions, cursor, and zooms baked in.
 | `zoomReset` | `duration?` | zoom back out |
 | `scroll` | `selector` \| `y`, `duration?` | smooth-scroll to an element or offset |
 | `wait` | `duration` \| `selector` | pause for ms, or until an element is visible |
-| `endcard` | `title`, `subtitle?`, `duration?` | full-screen closing card |
+| `scene` | `title`, `preset?`, `subtitle?`, `accent?`, `items?`, `duration?` | full-screen animated card: `title` (default), `list` (needs `items`) or `outro`. See [Motion scenes](#motion-scenes) |
+| `endcard` | `title`, `subtitle?`, `duration?` | closing card: a `scene` with `preset: 'outro'` that stays on screen to the end |
 
 Timing is real-time: a `caption` with `duration: 2600` is on screen for 2.6 seconds of video. `wait` with a `selector` is how you sync to your app actually doing something (a request finishing, a result rendering) instead of guessing milliseconds.
 
@@ -104,11 +105,62 @@ TypeScript types ship with the package, so `defineDemo`, the step shapes, and `r
 
 ## Social formats
 
-One capture, three crops — so you don't record three times:
+One capture, three crops, so you don't record three times (scenes are the exception: they are recorded at each format's size, see [Motion scenes](#motion-scenes)):
 
 - `landscape` — 1280×720, for the site / YouTube / X
 - `square` — 1080×1080, center-cropped, for the LinkedIn / Instagram feed
 - `vertical` — 1080×1920, the landscape centered over a blurred fill, for Reels / Shorts
+
+With a [backdrop](#backdrop-optional), every format shows the whole capture as a window over the animated background instead.
+
+## Motion scenes
+
+A demo usually needs a little around the recording: an opening title, a beat that names what comes next, a closing card. `scene` steps are those, animated (words revealed from blur, cards sliding in, a slowly drifting background) and placed anywhere in `steps`.
+
+```js
+steps: [
+  { type: 'scene', title: 'Your demo, as code. Always current.', accent: 'code.', subtitle: 'demowright' },
+  { type: 'caption', text: 'Too many items in the sidebar.', style: 'words', accent: 'Too many' },
+  // …
+  { type: 'scene', preset: 'list', title: 'Or: just ask.', accent: 'ask.', items: [
+    { label: 'Type the question', hint: 'in plain words' },
+    'Read the answer',
+  ] },
+  // …
+  { type: 'scene', preset: 'outro', title: 'My Product', subtitle: 'myproduct.com' },
+]
+```
+
+- **Presets**: `title` (the default) reveals the title word by word with an optional `subtitle`; `list` adds `items` (strings, or `{ label, hint }`) as cards; `outro` is the closing card, and `endcard` is now shorthand for it.
+- **`accent`** lists the words of the title drawn in `theme.accent`, matched without case or punctuation.
+- **Theme**: scenes read `theme.accent`, `theme.font` and `theme.background` (default `#07070a`). Fonts are the ones installed where the render runs: nothing is fetched, so a render works offline.
+- **Recorded per format.** A scene is its own HTML page, recorded by Playwright at the exact size of every format you ask for, so a centered title is not cut by the square crop or shrunk by the vertical one. During the capture the page is covered for the scene's duration, and the render swaps that stretch for the scene clip of the same length: narration and music stay where they were.
+- **Cut on the frames, not on the clock.** The cover carries two small colour cells in its top-left corner, and the render finds the stretches by reading them from the decoded video. The wall clock runs 0.1 to 0.25 s off the capture depending on the machine, so cutting on it would flash the cover. Keep that corner of the page free of anything drawn on top during a scene.
+- **`endcard` stays to the end**, like it always did, even with steps after it: any new page (a `goto`, a link clicked, a redirect) gets it back at once, and later scenes keep the page covered too. An explicit `scene` uncovers the page when it is done, unless it is the last step.
+- **Without the clips** (calling `runDemo` and `renderVideo` yourself), a scene renders as a plain card with its title, and its marker is painted over. That takes a decode of the whole capture: pass `scenes: []` to `renderVideo` when you know there are none.
+- **How many recordings at once** follows the CPUs the process may use, container quota included (`/sys/fs/cgroup/cpu.max`), half of them per stage. `DEMOWRIGHT_CPUS=2` overrides the count.
+- **Stopping a run**: `recordDemo(demo, { signal })` takes an `AbortSignal`: the capture stops between two steps, recordings in progress are cut short, the ones not started are skipped and a running ffmpeg is killed. A failure in one recording (or in the voiceover) stops the others the same way.
+- **An opening scene also hides the page load**: it replaces the capture from its very first frame, so the video starts on the title instead of a white page.
+
+Each scene costs one short extra recording per format, in real time; formats record side by side, and while they do the voiceover is synthesized. `node scripts/frame-check.mjs` renders `examples/scenes.config.js` and reports how many frames those real-time recordings dropped on your machine; CI runs it on every pull request.
+
+## Backdrop (optional)
+
+`backdrop: true` shows the capture as a browser window over the same animated background the scenes use, instead of filling the frame:
+
+```js
+export default defineDemo({
+  url: 'https://app.example.com',
+  backdrop: { frame: 'browser', scale: 0.86, url: 'app.example.com' },
+  steps: [/* … */],
+})
+```
+
+- `frame`: `browser` (an address bar with the three dots) or `none` (just the rounded window).
+- `scale`: how much of the frame the window takes, in both directions, from 0.5 to 1 (default 0.86).
+- `url`: the text in the address bar, by default the host of the demo `url` (nothing for a `file://` page).
+
+It changes the social formats too: with a backdrop, `square` and `vertical` show the whole window over the background instead of a center crop or a blurred copy. The background is a 12-second loop recorded once per format, so a long demo costs no more than a short one.
 
 ## Voiceover (optional)
 
