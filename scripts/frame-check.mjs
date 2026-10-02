@@ -24,6 +24,10 @@ import { recordDemo, detectMarkerRuns } from '../src/index.js'
 const args = process.argv.slice(2)
 const maxIdx = args.indexOf('--max-dup-percent')
 const maxDup = maxIdx >= 0 ? Number(args[maxIdx + 1]) : null
+if (maxIdx >= 0 && !(Number.isFinite(maxDup) && maxDup >= 0)) {
+  console.error('✗ --max-dup-percent needs a number, e.g. --max-dup-percent 15')
+  process.exit(2)
+}
 const configPath = args.find((a, i) => !a.startsWith('--') && (maxIdx < 0 || i !== maxIdx + 1)) || 'examples/scenes.config.js'
 
 /** Per-frame hashes of `file` from `fromSec` on. */
@@ -66,6 +70,11 @@ for (const sub of ['scenes', 'backdrop']) {
   for (const f of files) rows.push({ clip: sub + '/' + f.slice(0, 13), ...(await measure(path.join(dir, f))) })
 }
 
+// Nothing measured is not a pass: the clips moved or were never recorded.
+if (!rows.length) {
+  console.error('✗ no scene or backdrop clip found in ' + workDir + ': nothing was measured')
+  process.exit(1)
+}
 const worst = rows.reduce((m, r) => Math.max(m, r.pct), 0)
 const table = [
   '| clip | frames | repeated | % |',

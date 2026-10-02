@@ -10,9 +10,10 @@ import { rm } from 'node:fs/promises'
 import path from 'node:path'
 import { normalizeDemo, defineDemo, estimateDurationMs, STEP_TYPES } from './steps.js'
 import { runDemo, recordScenes, recordBackdrop } from './runner.js'
-import { renderVideo } from './render.js'
+import { renderVideo, remapTime } from './render.js'
 import { synthesizeNarration } from './voice.js'
 import { detectMarkerRuns, matchScenes } from './marker.js'
+import { LOOP_SEC } from './scenes.js'
 
 export { defineDemo, normalizeDemo, runDemo, recordScenes, recordBackdrop, renderVideo, estimateDurationMs, STEP_TYPES }
 export { detectMarkerRuns, matchScenes }
@@ -35,19 +36,37 @@ export async function recordDemo(rawDemo, opts = {}) {
   })
   const formats = opts.formats && opts.formats.length ? opts.formats : demo.formats
 
-  // Where each scene sits in the capture, read from the frames (marker.js).
-  const sceneRanges = scenes.length ? matchScenes(scenes, await detectMarkerRuns(rawVideoPath)) : []
+  // Where each scene sits in the capture, read from the frames (marker.js). Over
+  // a backdrop, a scene starts its background where the window's loop is at that
+  // moment of the final video, so the background does not jump at the cuts.
+  const matched = scenes.length ? matchScenes(scenes, await detectMarkerRuns(rawVideoPath)) : []
+  const sceneRanges = matched.map((sc) => ({
+    ...sc,
+    phase: demo.backdrop ? remapTime(sc.start, timelapses) % LOOP_SEC : 0,
+  }))
 
   // Scene clips (recorded once per format, at that format's size, now that their
   // real length is known) and the voiceover (synthesized before rendering, so the
   // lines can be muxed in at their timestamps) do not depend on each other.
   const voiceLines = demo.voice && narration.length
   if (voiceLines && opts.onVoice) opts.onVoice(narration.length)
-  const [sceneClips, voiceCues, backdropAssets] = await Promise.all([
-    recordScenes(demo, sceneRanges, formats, { workDir, onScene: opts.onScene }),
-    voiceLines ? synthesizeNarration(narration, demo.voice, workDir) : [],
-    recordBackdrop(demo, formats, { workDir, onBackdrop: opts.onBackdrop }),
+  // The first failure stops the recordings that have not started, and is the
+  // error reported, once everything in flight has settled.
+  const stop = new AbortController()
+  let first = null
+  const guard = (p) =>
+    p.catch((err) => {
+      if (!first) first = err
+      stop.abort()
+      throw err
+    })
+  const settled = await Promise.allSettled([
+    guard(recordScenes(demo, sceneRanges, formats, { workDir, onScene: opts.onScene, signal: stop.signal })),
+    guard(voiceLines ? synthesizeNarration(narration, demo.voice, workDir) : Promise.resolve([])),
+    guard(recordBackdrop(demo, formats, { workDir, onBackdrop: opts.onBackdrop, signal: stop.signal })),
   ])
+  if (first) throw first
+  const [sceneClips, voiceCues, backdropAssets] = settled.map((r) => r.value)
 
   const outputs = await renderVideo(rawVideoPath, {
     out,

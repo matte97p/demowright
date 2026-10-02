@@ -9,7 +9,7 @@
  * is browser-free: it computes the geometry and the markup, and builds the
  * filter chain; the runner records and screenshots.
  */
-import { escapeHtml, FORMAT_SIZES } from './scenes.js'
+import { escapeHtml, FORMAT_SIZES, DEFAULT_FONT } from './scenes.js'
 
 export const BACKDROP_FRAMES = ['browser', 'none']
 
@@ -22,7 +22,7 @@ const even = (n) => 2 * Math.round(n / 2)
 export function normalizeBackdrop(backdrop, demoUrl, fail) {
   if (!backdrop) return null
   const b = backdrop === true ? {} : backdrop
-  if (typeof b !== 'object') fail('"backdrop" must be true or an object')
+  if (typeof b !== 'object' || Array.isArray(b)) fail('"backdrop" must be true or an object')
   const frame = b.frame == null ? 'browser' : b.frame
   if (!BACKDROP_FRAMES.includes(frame)) fail('backdrop.frame must be one of: ' + BACKDROP_FRAMES.join(', '))
   const scale = b.scale == null ? 0.86 : b.scale
@@ -74,7 +74,7 @@ const page = (w, h, css, body) =>
 
 /** The window chrome: address bar on top, a hairline border, transparent inside. */
 export function chromeHtml(g, backdrop, theme) {
-  const font = (theme && theme.font) || 'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif'
+  const font = (theme && theme.font) || DEFAULT_FONT
   const r = g.radius
   const bar = g.hb
     ? '<div class="bar"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i>' +

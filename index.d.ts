@@ -189,6 +189,8 @@ export interface SceneRange extends SceneStep {
   end: number
   /** The scene runs to the end of the capture. */
   toEnd: boolean
+  /** Seconds into the background loop where the scene's background starts. */
+  phase?: number
 }
 
 /** One cover found in a video: marker 0 or 1, in seconds. */
@@ -232,7 +234,7 @@ export interface BackdropAssets {
 export function recordBackdrop(
   demo: Demo,
   formats: Format[],
-  opts?: { workDir?: string; onBackdrop?: (format: Format) => void }
+  opts?: { workDir?: string; onBackdrop?: (format: Format) => void; signal?: AbortSignal }
 ): Promise<Partial<Record<Format, BackdropAssets>>>
 
 /** Find the scene covers in a capture, from its frames. */
@@ -245,7 +247,7 @@ export function recordScenes(
   demo: Demo,
   scenes: SceneRange[],
   formats: Format[],
-  opts?: { workDir?: string; onScene?: (format: Format, sceneIndex: number) => void }
+  opts?: { workDir?: string; onScene?: (format: Format, sceneIndex: number) => void; signal?: AbortSignal }
 ): Promise<Partial<Record<Format, SceneClip[]>>>
 
 export function renderVideo(
@@ -268,8 +270,11 @@ export function renderVideo(
   }
 ): Promise<Output[]>
 
-export function normalizeDemo(demo: Demo): Required<Omit<Demo, 'theme' | 'music' | 'locale' | 'init' | 'auth' | 'voice'>> &
-  Pick<Demo, 'theme' | 'music' | 'locale' | 'init' | 'auth' | 'voice'>
+export function normalizeDemo(demo: Demo): Required<Omit<Demo, 'theme' | 'music' | 'locale' | 'init' | 'auth' | 'voice' | 'backdrop'>> &
+  Pick<Demo, 'theme' | 'music' | 'locale' | 'init' | 'auth' | 'voice'> & {
+    /** null when off; otherwise every field filled in. */
+    backdrop: Required<Backdrop> | null
+  }
 
 export function estimateDurationMs(demo: Demo): number
 

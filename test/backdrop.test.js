@@ -69,3 +69,18 @@ test('the marker paint runs before the capture is scaled into the window', () =>
   const chain = backdropChain(backdropGeometry('landscape', vp, b), { bg: 1, chrome: 2, mask: 3, shadow: 4 }, 30, 'drawbox=x=0')
   assert.match(chain, /^\[0:v\]drawbox=x=0,scale=/)
 })
+
+test('an array is not a backdrop config', () => {
+  assert.throws(() => normalizeBackdrop([], 'http://x', fail), /must be true or an object/)
+  assert.throws(() => normalizeBackdrop(['browser'], 'http://x', fail), /must be true or an object/)
+})
+
+test('normalizeDemo is idempotent, so the stages can normalize what they are given', () => {
+  const raw = {
+    url: 'https://a.com',
+    backdrop: { scale: 0.8 },
+    steps: [{ type: 'scene', title: 'Hi' }, { type: 'endcard', title: 'End' }],
+  }
+  const once = normalizeDemo(raw)
+  assert.deepEqual(normalizeDemo(once), once)
+})

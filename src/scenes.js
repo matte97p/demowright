@@ -24,7 +24,7 @@ export const FORMAT_SIZES = {
 export const SCENE_PRESETS = ['title', 'list', 'outro']
 
 const DEFAULT_BG = '#07070a'
-const DEFAULT_FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif'
+export const DEFAULT_FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif'
 
 export function escapeHtml(s) {
   return String(s == null ? '' : s)
@@ -73,7 +73,7 @@ function particles(n) {
       'width:calc(' + (2 + rand(i + 201) * 3).toFixed(1) + ' * var(--u));' +
       '--o:' + (0.1 + rand(i + 301) * 0.25).toFixed(2) + ';' +
       '--d:-' + (10 + rand(i + 401) * 20).toFixed(1) + 'vh;' +
-      'animation-delay:-' + (rand(i + 501) * LOOP_SEC).toFixed(2) + 's'
+      'animation-delay:calc(-' + (rand(i + 501) * LOOP_SEC).toFixed(2) + 's - var(--ph))'
     out += '<i class="p" style="' + style + '"></i>'
   }
   return out
@@ -122,13 +122,14 @@ function body(scene) {
  * @param {object} theme  demo theme ({ accent?, font?, background? })
  * @param {number} durationMs  how long the scene lasts in the final video
  * @param {boolean} last  the last scene of the video does not fade out
+ * @param {number} [phaseSec]  where in its loop the background starts (see backgroundCss)
  */
-export function buildSceneHtml(scene, theme, durationMs, last) {
+export function buildSceneHtml(scene, theme, durationMs, last, phaseSec = 0) {
   const t = theme || {}
   const exitAt = Math.max(0, durationMs - 450)
   const exit = last ? '' : '.stage{animation:dw-out 420ms ease ' + exitAt + 'ms forwards}'
 
-  const css = backgroundCss(t) + `
+  const css = backgroundCss(t, phaseSec) + `
 body:not(.go) *{animation-play-state:paused!important}
 .stage{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:calc(26*var(--u));padding:0 7vw;text-align:center}
 h1,h2{font-weight:800;letter-spacing:-.02em;line-height:1.1}
@@ -165,24 +166,26 @@ export const LOOP_SEC = 12
 /**
  * CSS of the shared animated background (and the page basics). Every animation
  * period divides LOOP_SEC, so a LOOP_SEC recording repeats with no visible seam.
+ * `phaseSec` starts the background that far into its loop: a scene shown over a
+ * backdrop picks the background up where the window's loop is at that moment.
  */
-export function backgroundCss(theme) {
+export function backgroundCss(theme, phaseSec = 0) {
   const t = theme || {}
   const accent = t.accent || '#e91e63'
   const bg = t.background || DEFAULT_BG
   const font = t.font || DEFAULT_FONT
   return `
-:root{--u:calc(min(100vw,100vh)/1080);--accent:${accent};--bg:${bg};--ease:cubic-bezier(0.22,0.61,0.36,1)}
+:root{--u:calc(min(100vw,100vh)/1080);--accent:${accent};--bg:${bg};--ease:cubic-bezier(0.22,0.61,0.36,1);--ph:${(+phaseSec || 0).toFixed(3)}s}
 *{box-sizing:border-box;margin:0}
 html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:#f5f7fa;font-family:${font}}
 .mk{position:fixed;left:0;top:0;display:flex;z-index:9}.mk i{width:${MARKER.cell}px;height:${MARKER.cell}px}
 body.go .mk{display:none}
 .bg,.grid,.vig{position:absolute;inset:0}
-.blob{position:absolute;width:85vmax;height:85vmax;border-radius:50%;animation:dw-drift ${LOOP_SEC / 2}s ease-in-out infinite alternate}
+.blob{position:absolute;width:85vmax;height:85vmax;border-radius:50%;animation:dw-drift ${LOOP_SEC / 2}s ease-in-out infinite alternate;animation-delay:calc(0s - var(--ph))}
 .b1{left:45%;top:-30%;background:radial-gradient(circle,color-mix(in srgb,var(--accent) 30%,transparent) 0%,transparent 65%)}
-.b2{left:-35%;top:25%;background:radial-gradient(circle,rgba(124,58,237,.22) 0%,transparent 65%);animation-delay:-2s}
-.b3{left:20%;top:55%;background:radial-gradient(circle,rgba(37,99,235,.16) 0%,transparent 65%);animation-delay:-4s}
-.grid{background-image:linear-gradient(rgba(255,255,255,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.04) 1px,transparent 1px);background-size:calc(72*var(--u)) calc(72*var(--u));animation:dw-grid ${LOOP_SEC}s linear infinite;-webkit-mask-image:radial-gradient(ellipse at 50% 50%,#000 20%,transparent 75%)}
+.b2{left:-35%;top:25%;background:radial-gradient(circle,rgba(124,58,237,.22) 0%,transparent 65%);animation-delay:calc(-2s - var(--ph))}
+.b3{left:20%;top:55%;background:radial-gradient(circle,rgba(37,99,235,.16) 0%,transparent 65%);animation-delay:calc(-4s - var(--ph))}
+.grid{background-image:linear-gradient(rgba(255,255,255,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.04) 1px,transparent 1px);background-size:calc(72*var(--u)) calc(72*var(--u));animation:dw-grid ${LOOP_SEC}s linear infinite;animation-delay:calc(0s - var(--ph));-webkit-mask-image:radial-gradient(ellipse at 50% 50%,#000 20%,transparent 75%)}
 .p{position:absolute;aspect-ratio:1;border-radius:50%;background:#fff;opacity:0;animation:dw-float ${LOOP_SEC}s linear infinite}
 .vig{background:radial-gradient(ellipse at 50% 50%,transparent 45%,rgba(0,0,0,.6) 100%)}
 @keyframes dw-drift{to{transform:translate(8vw,6vh) scale(1.08)}}

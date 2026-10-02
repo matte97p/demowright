@@ -54,3 +54,11 @@ test('every format has a size and the presets are the documented three', () => {
   assert.deepEqual(Object.keys(FORMAT_SIZES), ['landscape', 'square', 'vertical'])
   assert.deepEqual(SCENE_PRESETS, ['title', 'list', 'outro'])
 })
+
+test('a scene can start its background part way into the loop', () => {
+  assert.ok(buildSceneHtml(scene(), {}, 2800, false).includes('--ph:0.000s'))
+  const html = buildSceneHtml(scene(), {}, 2800, false, 7.25)
+  assert.ok(html.includes('--ph:7.250s'))
+  // Every background animation takes the phase into account.
+  assert.equal((html.match(/var\(--ph\)/g) || []).length >= 4 + 36, true)
+})
