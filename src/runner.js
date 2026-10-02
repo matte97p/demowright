@@ -3,7 +3,8 @@
  * the polish into the same frames Playwright records. Output is a raw .webm.
  */
 import { chromium } from 'playwright'
-import { mkdir } from 'node:fs/promises'
+import { mkdir, rm } from 'node:fs/promises'
+import { availableParallelism } from 'node:os'
 import path from 'node:path'
 import { buildInitScript } from './overlay.js'
 import { buildSceneHtml, buildBackgroundHtml, FORMAT_SIZES, LOOP_SEC } from './scenes.js'
@@ -293,9 +294,57 @@ export async function runDemo(demo, opts = {}) {
 }
 
 /**
+ * How many real-time recordings run at once. Each one needs a core to keep its
+ * frame rate: on a 4-core CI runner six at once started their videos so late
+ * that the start marker was never recorded.
+ */
+const recordSlots = () => Math.max(1, Math.floor(availableParallelism() / 2))
+
+/** Run `fn` over `items`, at most `limit` at a time, keeping the order of results. */
+async function mapLimit(items, limit, fn) {
+  const results = new Array(items.length)
+  let next = 0
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++
+      results[i] = await fn(items[i], i)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+  return results
+}
+
+/** Start-marker holds tried in turn: a busy machine starts the video later. */
+const MARKER_HOLDS_MS = [500, 1500, 3500]
+
+/**
+ * Record `html` at `size` for `runMs` after its start, and return { path, offset }:
+ * where the start marker ends, the animation begins. If the marker was not
+ * recorded (the video started after it was gone), record again holding it longer.
+ */
+async function recordClip(browser, dir, size, html, runMs, label) {
+  for (const hold of MARKER_HOLDS_MS) {
+    const context = await browser.newContext({ viewport: size, deviceScaleFactor: 1, recordVideo: { dir, size }, reducedMotion: 'no-preference' })
+    const page = await context.newPage()
+    await page.setContent(html, { waitUntil: 'load' })
+    await page.evaluate(() => document.fonts.ready)
+    await sleep(page, hold)
+    await page.evaluate(() => document.body.classList.add('go'))
+    await sleep(page, runMs)
+    const video = page.video()
+    await context.close()
+    const clipPath = await video.path()
+    const runs = await detectMarkerRuns(clipPath, { minSec: 0 })
+    if (runs.length) return { path: clipPath, offset: runs[0].end }
+    await rm(clipPath, { force: true })
+  }
+  throw new Error('[demowright] ' + label + ': start marker not recorded, even holding it ' + MARKER_HOLDS_MS.at(-1) + ' ms')
+}
+
+/**
  * Record every scene once per format, at that format's output size. `scenes` are
  * the ranges matched to the capture (marker.js: { step, start, end, toEnd }).
- * Formats record side by side; the scenes of one format one after another.
+ * Clips record side by side, as many at once as the machine has cores for.
  * Returns, per format, one { path, offset, length } per scene (seconds): the clip
  * is used from `offset`, the first frame after the animation started.
  */
@@ -309,40 +358,19 @@ export async function recordScenes(demo, scenes, formats, opts = {}) {
   await mkdir(dir, { recursive: true })
   const browser = await chromium.launch({ headless: true })
   try {
-    await Promise.all(
-      formats.map(async (format) => {
-        const size = FORMAT_SIZES[format]
-        const clips = []
-        for (let k = 0; k < scenes.length; k++) {
-          const sc = scenes[k]
-          const length = sc.end - sc.start
-          if (opts.onScene) opts.onScene(format, k)
-          const context = await browser.newContext({
-            viewport: size,
-            deviceScaleFactor: 1,
-            recordVideo: { dir, size },
-            reducedMotion: 'no-preference',
-          })
-          const page = await context.newPage()
-          // A scene that runs to the end of the video does not fade out.
-          await page.setContent(buildSceneHtml(sc.step, demo.theme, length * 1000, sc.toEnd), { waitUntil: 'load' })
-          await page.evaluate(() => document.fonts.ready)
-          // Hold the start marker long enough to be recorded: the video starts a
-          // little after the page, and later still with formats recording side by side.
-          await sleep(page, 500)
-          await page.evaluate(() => document.body.classList.add('go'))
-          await sleep(page, length * 1000 + 300)
-          const video = page.video()
-          await context.close()
-          const clipPath = await video.path()
-          // The marker sits on the page until `go`: where it ends, the scene starts.
-          const runs = await detectMarkerRuns(clipPath, { minSec: 0 })
-          if (!runs.length) throw new Error('[demowright] scene ' + (k + 1) + ' (' + format + '): start marker not found')
-          clips.push({ path: clipPath, offset: runs[0].end, length })
-        }
-        out[format] = clips
-      })
-    )
+    const jobs = formats.flatMap((format) => scenes.map((sc, k) => ({ format, sc, k })))
+    const clips = await mapLimit(jobs, recordSlots(), async ({ format, sc, k }) => {
+      const length = sc.end - sc.start
+      if (opts.onScene) opts.onScene(format, k)
+      // A scene that runs to the end of the video does not fade out.
+      const html = buildSceneHtml(sc.step, demo.theme, length * 1000, sc.toEnd)
+      const clip = await recordClip(browser, dir, FORMAT_SIZES[format], html, length * 1000 + 300, 'scene ' + (k + 1) + ' (' + format + ')')
+      return { ...clip, length }
+    })
+    jobs.forEach((job, i) => {
+      out[job.format] = out[job.format] || []
+      out[job.format][job.k] = clips[i]
+    })
   } finally {
     await browser.close()
   }
@@ -352,7 +380,8 @@ export async function recordScenes(demo, scenes, formats, opts = {}) {
 /**
  * Make what the backdrop needs, once per format: a clean LOOP_SEC loop of the
  * background (recorded, then trimmed to the frames after its start marker) and
- * the chrome, mask and shadow images. Formats are made side by side.
+ * the chrome, mask and shadow images. Formats are made side by side, as many at
+ * once as the machine has cores for.
  * Returns, per format, { background, chrome, mask, shadow, geometry }.
  */
 export async function recordBackdrop(demo, formats, opts = {}) {
@@ -362,47 +391,36 @@ export async function recordBackdrop(demo, formats, opts = {}) {
   await mkdir(dir, { recursive: true })
   const browser = await chromium.launch({ headless: true })
   try {
-    await Promise.all(
-      formats.map(async (format) => {
-        const size = FORMAT_SIZES[format]
-        if (!size) throw new Error('[demowright] unknown format "' + format + '" (use landscape|square|vertical)')
-        if (opts.onBackdrop) opts.onBackdrop(format)
-        const geometry = backdropGeometry(format, demo.viewport, demo.backdrop)
+    await mapLimit(formats, recordSlots(), async (format) => {
+      const size = FORMAT_SIZES[format]
+      if (!size) throw new Error('[demowright] unknown format "' + format + '" (use landscape|square|vertical)')
+      if (opts.onBackdrop) opts.onBackdrop(format)
+      const geometry = backdropGeometry(format, demo.viewport, demo.backdrop)
 
-        // Still images, rendered from HTML with a transparent page.
-        const shot = async (name, html, w, h, transparent) => {
-          const ctx = await browser.newContext({ viewport: { width: w, height: h }, deviceScaleFactor: 1 })
-          const page = await ctx.newPage()
-          await page.setContent(html, { waitUntil: 'load' })
-          const file = path.join(dir, format + '-' + name + '.png')
-          await page.screenshot({ path: file, omitBackground: transparent })
-          await ctx.close()
-          return file
-        }
-        const chrome = await shot('chrome', chromeHtml(geometry, demo.backdrop, demo.theme), geometry.ww, geometry.total, true)
-        const mask = await shot('mask', maskHtml(geometry), geometry.ww, geometry.total, false)
-        const shadow = await shot('shadow', shadowHtml(geometry), geometry.W, geometry.H, true)
+      // Still images, rendered from HTML with a transparent page.
+      const shot = async (name, html, w, h, transparent) => {
+        const ctx = await browser.newContext({ viewport: { width: w, height: h }, deviceScaleFactor: 1 })
+        const page = await ctx.newPage()
+        await page.setContent(html, { waitUntil: 'load' })
+        const file = path.join(dir, format + '-' + name + '.png')
+        await page.screenshot({ path: file, omitBackground: transparent })
+        await ctx.close()
+        return file
+      }
+      const chrome = await shot('chrome', chromeHtml(geometry, demo.backdrop, demo.theme), geometry.ww, geometry.total, true)
+      const mask = await shot('mask', maskHtml(geometry), geometry.ww, geometry.total, false)
+      const shadow = await shot('shadow', shadowHtml(geometry), geometry.W, geometry.H, true)
 
-        // The background loop, recorded in real time like a scene.
-        const context = await browser.newContext({ viewport: size, deviceScaleFactor: 1, recordVideo: { dir, size } })
-        const page = await context.newPage()
-        await page.setContent(buildBackgroundHtml(demo.theme), { waitUntil: 'load' })
-        await sleep(page, 500)
-        await page.evaluate(() => document.body.classList.add('go'))
-        await sleep(page, LOOP_SEC * 1000 + 400)
-        const video = page.video()
-        await context.close()
-        const raw = await video.path()
-        const runs = await detectMarkerRuns(raw, { minSec: 0 })
-        if (!runs.length) throw new Error('[demowright] backdrop (' + format + '): start marker not found')
-        const background = path.join(dir, format + '-loop.mp4')
-        await runFfmpeg([
-          '-y', '-loglevel', 'error', '-ss', runs[0].end.toFixed(3), '-i', raw, '-t', String(LOOP_SEC),
-          '-vf', 'fps=' + (demo.fps || 30) + ',format=yuv420p', '-c:v', 'libx264', '-preset', 'medium', '-crf', '18', background,
-        ])
-        out[format] = { background, chrome, mask, shadow, geometry }
-      })
-    )
+      // The background loop, recorded in real time like a scene, then cut to
+      // exactly one loop from its start.
+      const clip = await recordClip(browser, dir, size, buildBackgroundHtml(demo.theme), LOOP_SEC * 1000 + 400, 'backdrop (' + format + ')')
+      const background = path.join(dir, format + '-loop.mp4')
+      await runFfmpeg([
+        '-y', '-loglevel', 'error', '-ss', clip.offset.toFixed(3), '-i', clip.path, '-t', String(LOOP_SEC),
+        '-vf', 'fps=' + (demo.fps || 30) + ',format=yuv420p', '-c:v', 'libx264', '-preset', 'medium', '-crf', '18', background,
+      ])
+      out[format] = { background, chrome, mask, shadow, geometry }
+    })
   } finally {
     await browser.close()
   }
