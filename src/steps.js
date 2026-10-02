@@ -7,6 +7,7 @@
  */
 
 import { SCENE_PRESETS } from './scenes.js'
+import { normalizeBackdrop } from './backdrop.js'
 
 /** Default timing (ms) per step kind. Tuned to read well at normal playback. */
 const DEFAULTS = {
@@ -107,6 +108,9 @@ export function normalizeDemo(demo) {
     // seeding state that must exist at boot, e.g. dismissing a first-run tour.
     init: typeof demo.init === 'string' ? demo.init : null,
     auth: normalizeAuth(demo.auth),
+    // Optional: show the capture as a browser window over the animated
+    // background, instead of filling the frame. See src/backdrop.js.
+    backdrop: normalizeBackdrop(demo.backdrop, demo.url, fail),
     // Optional voiceover. When set, steps carrying `say` (and, with
     // `fromCaptions`, every caption) are narrated. See src/voice.js.
     voice: normalizeVoice(demo.voice),

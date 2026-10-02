@@ -15,6 +15,12 @@ All notable changes to this project are documented here. The format is based on
 - `caption.style: 'words'` reveals a caption word by word, with `accent` words in
   the theme colour.
 - `theme.background`, the base colour of scenes.
+- `backdrop`: the capture shown as a browser window (address bar, rounded corners,
+  drop shadow) over the animated background. With it, `square` and `vertical`
+  show the whole window instead of a crop. The background is a seamless 12 s loop
+  recorded once per format.
+- `scripts/frame-check.mjs` and a CI job that render `examples/scenes.config.js`
+  and report the frames the real-time recordings dropped.
 
 - Scene cuts are read from the frames: the cover carries a two-cell colour marker
   that the render decodes, instead of trusting the wall clock.

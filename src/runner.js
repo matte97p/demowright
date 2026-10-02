@@ -6,7 +6,9 @@ import { chromium } from 'playwright'
 import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 import { buildInitScript } from './overlay.js'
-import { buildSceneHtml, FORMAT_SIZES } from './scenes.js'
+import { buildSceneHtml, buildBackgroundHtml, FORMAT_SIZES, LOOP_SEC } from './scenes.js'
+import { backdropGeometry, chromeHtml, maskHtml, shadowHtml } from './backdrop.js'
+import { runFfmpeg } from './render.js'
 import { detectMarkerRuns } from './marker.js'
 
 const sleep = (page, ms) => page.waitForTimeout(Math.max(0, ms | 0))
@@ -339,6 +341,66 @@ export async function recordScenes(demo, scenes, formats, opts = {}) {
           clips.push({ path: clipPath, offset: runs[0].end, length })
         }
         out[format] = clips
+      })
+    )
+  } finally {
+    await browser.close()
+  }
+  return out
+}
+
+/**
+ * Make what the backdrop needs, once per format: a clean LOOP_SEC loop of the
+ * background (recorded, then trimmed to the frames after its start marker) and
+ * the chrome, mask and shadow images. Formats are made side by side.
+ * Returns, per format, { background, chrome, mask, shadow, geometry }.
+ */
+export async function recordBackdrop(demo, formats, opts = {}) {
+  const out = {}
+  if (!demo.backdrop) return out
+  const dir = path.join(opts.workDir || path.join(process.cwd(), '.demowright-tmp'), 'backdrop')
+  await mkdir(dir, { recursive: true })
+  const browser = await chromium.launch({ headless: true })
+  try {
+    await Promise.all(
+      formats.map(async (format) => {
+        const size = FORMAT_SIZES[format]
+        if (!size) throw new Error('[demowright] unknown format "' + format + '" (use landscape|square|vertical)')
+        if (opts.onBackdrop) opts.onBackdrop(format)
+        const geometry = backdropGeometry(format, demo.viewport, demo.backdrop)
+
+        // Still images, rendered from HTML with a transparent page.
+        const shot = async (name, html, w, h, transparent) => {
+          const ctx = await browser.newContext({ viewport: { width: w, height: h }, deviceScaleFactor: 1 })
+          const page = await ctx.newPage()
+          await page.setContent(html, { waitUntil: 'load' })
+          const file = path.join(dir, format + '-' + name + '.png')
+          await page.screenshot({ path: file, omitBackground: transparent })
+          await ctx.close()
+          return file
+        }
+        const chrome = await shot('chrome', chromeHtml(geometry, demo.backdrop, demo.theme), geometry.ww, geometry.total, true)
+        const mask = await shot('mask', maskHtml(geometry), geometry.ww, geometry.total, false)
+        const shadow = await shot('shadow', shadowHtml(geometry), geometry.W, geometry.H, true)
+
+        // The background loop, recorded in real time like a scene.
+        const context = await browser.newContext({ viewport: size, deviceScaleFactor: 1, recordVideo: { dir, size } })
+        const page = await context.newPage()
+        await page.setContent(buildBackgroundHtml(demo.theme), { waitUntil: 'load' })
+        await sleep(page, 500)
+        await page.evaluate(() => document.body.classList.add('go'))
+        await sleep(page, LOOP_SEC * 1000 + 400)
+        const video = page.video()
+        await context.close()
+        const raw = await video.path()
+        const runs = await detectMarkerRuns(raw, { minSec: 0 })
+        if (!runs.length) throw new Error('[demowright] backdrop (' + format + '): start marker not found')
+        const background = path.join(dir, format + '-loop.mp4')
+        await runFfmpeg([
+          '-y', '-loglevel', 'error', '-ss', runs[0].end.toFixed(3), '-i', raw, '-t', String(LOOP_SEC),
+          '-vf', 'fps=' + (demo.fps || 30) + ',format=yuv420p', '-c:v', 'libx264', '-preset', 'medium', '-crf', '18', background,
+        ])
+        out[format] = { background, chrome, mask, shadow, geometry }
       })
     )
   } finally {

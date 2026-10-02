@@ -65,13 +65,15 @@ function rand(seed) {
 function particles(n) {
   let out = ''
   for (let i = 0; i < n; i++) {
+    // Every particle lives exactly one loop and fades at both ends, so the jump
+    // back to its start is never seen and the background loops without a seam.
     const style =
       'left:' + (rand(i + 1) * 100).toFixed(2) + '%;' +
       'top:' + (rand(i + 101) * 100).toFixed(2) + '%;' +
       'width:calc(' + (2 + rand(i + 201) * 3).toFixed(1) + ' * var(--u));' +
-      'opacity:' + (0.1 + rand(i + 301) * 0.25).toFixed(2) + ';' +
-      'animation-duration:' + (9 + rand(i + 401) * 8).toFixed(1) + 's;' +
-      'animation-delay:-' + (rand(i + 501) * 8).toFixed(1) + 's'
+      '--o:' + (0.1 + rand(i + 301) * 0.25).toFixed(2) + ';' +
+      '--d:-' + (10 + rand(i + 401) * 20).toFixed(1) + 'vh;' +
+      'animation-delay:-' + (rand(i + 501) * LOOP_SEC).toFixed(2) + 's'
     out += '<i class="p" style="' + style + '"></i>'
   }
   return out
@@ -123,27 +125,11 @@ function body(scene) {
  */
 export function buildSceneHtml(scene, theme, durationMs, last) {
   const t = theme || {}
-  const accent = t.accent || '#e91e63'
-  const bg = t.background || DEFAULT_BG
-  const font = t.font || DEFAULT_FONT
   const exitAt = Math.max(0, durationMs - 450)
   const exit = last ? '' : '.stage{animation:dw-out 420ms ease ' + exitAt + 'ms forwards}'
 
-  const css = `
-:root{--u:calc(min(100vw,100vh)/1080);--accent:${accent};--bg:${bg};--ease:cubic-bezier(0.22,0.61,0.36,1)}
-*{box-sizing:border-box;margin:0}
-html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:#f5f7fa;font-family:${font}}
+  const css = backgroundCss(t) + `
 body:not(.go) *{animation-play-state:paused!important}
-.mk{position:fixed;left:0;top:0;display:flex;z-index:9}.mk i{width:${MARKER.cell}px;height:${MARKER.cell}px}
-body.go .mk{display:none}
-.bg,.grid,.vig{position:absolute;inset:0}
-.blob{position:absolute;width:85vmax;height:85vmax;border-radius:50%;animation:dw-drift 16s ease-in-out infinite alternate}
-.b1{left:45%;top:-30%;background:radial-gradient(circle,color-mix(in srgb,var(--accent) 30%,transparent) 0%,transparent 65%)}
-.b2{left:-35%;top:25%;background:radial-gradient(circle,rgba(124,58,237,.22) 0%,transparent 65%);animation-delay:-6s}
-.b3{left:20%;top:55%;background:radial-gradient(circle,rgba(37,99,235,.16) 0%,transparent 65%);animation-delay:-11s}
-.grid{background-image:linear-gradient(rgba(255,255,255,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.04) 1px,transparent 1px);background-size:calc(72*var(--u)) calc(72*var(--u));animation:dw-grid 20s linear infinite;-webkit-mask-image:radial-gradient(ellipse at 50% 50%,#000 20%,transparent 75%)}
-.p{position:absolute;aspect-ratio:1;border-radius:50%;background:#fff;animation:dw-float linear infinite}
-.vig{background:radial-gradient(ellipse at 50% 50%,transparent 45%,rgba(0,0,0,.6) 100%)}
 .stage{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:calc(26*var(--u));padding:0 7vw;text-align:center}
 h1,h2{font-weight:800;letter-spacing:-.02em;line-height:1.1}
 h1{font-size:calc(86*var(--u));max-width:92vw}
@@ -162,17 +148,66 @@ h2{font-size:calc(60*var(--u))}
 @keyframes dw-slide{from{opacity:0;transform:translateX(calc(-60*var(--u)))}to{opacity:1;transform:none}}
 @keyframes dw-pop{from{opacity:0;filter:blur(14px);transform:scale(.86)}to{opacity:1;filter:blur(0);transform:none}}
 @keyframes dw-out{to{opacity:0;transform:translateY(calc(-26*var(--u)))}}
-@keyframes dw-drift{to{transform:translate(8vw,6vh) scale(1.08)}}
-@keyframes dw-grid{to{background-position:calc(-720*var(--u)) calc(-432*var(--u))}}
-@keyframes dw-float{from{transform:translateY(0)}to{transform:translateY(-30vh)}}
 ${exit}`
 
   return (
     '<!doctype html><html><head><meta charset="utf-8"><style>' + css + '</style></head><body>' +
-    '<div class="bg"><div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div></div>' +
-    '<div class="grid"></div>' + particles(36) + '<div class="vig"></div>' +
+    backgroundMarkup() +
     '<main class="stage">' + body(scene) + '</main>' +
-    '<div class="mk">' + markerCells(0).map((c) => '<i style="background:' + c + '"></i>').join('') + '</div>' +
+    markerMarkup() +
     '</body></html>'
+  )
+}
+
+/** Length of one background loop: every background animation repeats within it. */
+export const LOOP_SEC = 12
+
+/**
+ * CSS of the shared animated background (and the page basics). Every animation
+ * period divides LOOP_SEC, so a LOOP_SEC recording repeats with no visible seam.
+ */
+export function backgroundCss(theme) {
+  const t = theme || {}
+  const accent = t.accent || '#e91e63'
+  const bg = t.background || DEFAULT_BG
+  const font = t.font || DEFAULT_FONT
+  return `
+:root{--u:calc(min(100vw,100vh)/1080);--accent:${accent};--bg:${bg};--ease:cubic-bezier(0.22,0.61,0.36,1)}
+*{box-sizing:border-box;margin:0}
+html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:#f5f7fa;font-family:${font}}
+.mk{position:fixed;left:0;top:0;display:flex;z-index:9}.mk i{width:${MARKER.cell}px;height:${MARKER.cell}px}
+body.go .mk{display:none}
+.bg,.grid,.vig{position:absolute;inset:0}
+.blob{position:absolute;width:85vmax;height:85vmax;border-radius:50%;animation:dw-drift ${LOOP_SEC / 2}s ease-in-out infinite alternate}
+.b1{left:45%;top:-30%;background:radial-gradient(circle,color-mix(in srgb,var(--accent) 30%,transparent) 0%,transparent 65%)}
+.b2{left:-35%;top:25%;background:radial-gradient(circle,rgba(124,58,237,.22) 0%,transparent 65%);animation-delay:-2s}
+.b3{left:20%;top:55%;background:radial-gradient(circle,rgba(37,99,235,.16) 0%,transparent 65%);animation-delay:-4s}
+.grid{background-image:linear-gradient(rgba(255,255,255,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.04) 1px,transparent 1px);background-size:calc(72*var(--u)) calc(72*var(--u));animation:dw-grid ${LOOP_SEC}s linear infinite;-webkit-mask-image:radial-gradient(ellipse at 50% 50%,#000 20%,transparent 75%)}
+.p{position:absolute;aspect-ratio:1;border-radius:50%;background:#fff;opacity:0;animation:dw-float ${LOOP_SEC}s linear infinite}
+.vig{background:radial-gradient(ellipse at 50% 50%,transparent 45%,rgba(0,0,0,.6) 100%)}
+@keyframes dw-drift{to{transform:translate(8vw,6vh) scale(1.08)}}
+@keyframes dw-grid{to{background-position:calc(-360*var(--u)) calc(-216*var(--u))}}
+@keyframes dw-float{0%{opacity:0;transform:none}15%,85%{opacity:var(--o)}100%{opacity:0;transform:translateY(var(--d))}}`
+}
+
+/** Markup of the shared animated background. */
+export function backgroundMarkup() {
+  return (
+    '<div class="bg"><div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div></div>' +
+    '<div class="grid"></div>' + particles(36) + '<div class="vig"></div>'
+  )
+}
+
+/** The start marker, shown until the page gets `go`. */
+function markerMarkup() {
+  return '<div class="mk">' + markerCells(0).map((c) => '<i style="background:' + c + '"></i>').join('') + '</div>'
+}
+
+/** The background alone, to loop behind the capture (see backdrop.js). */
+export function buildBackgroundHtml(theme) {
+  return (
+    '<!doctype html><html><head><meta charset="utf-8"><style>' + backgroundCss(theme) +
+    'body:not(.go) *{animation-play-state:paused!important}</style></head><body>' +
+    backgroundMarkup() + markerMarkup() + '</body></html>'
   )
 }

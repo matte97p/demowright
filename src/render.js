@@ -13,6 +13,7 @@ import path from 'node:path'
 import ffmpegPath from 'ffmpeg-static'
 import { FORMAT_SIZES } from './scenes.js'
 import { MARKER, detectMarkerRuns } from './marker.js'
+import { backdropChain } from './backdrop.js'
 
 /** Video-filter graph per format. `[v]` is the labelled final video pad. */
 const FILTERS = {
@@ -35,21 +36,24 @@ const FILTERS = {
  * `input` is the ffmpeg input index of the scene clip, `offset` where its
  * animation starts. The replaced stretch and the clip have the same length, so
  * the timeline (and every narration cue placed on it) does not move.
+ * `backdrop` ({ geometry, inputs }, see backdrop.js) puts the capture in a window
+ * over the animated background instead of cropping it.
  * `masks` ({ start, end } in seconds) are scene covers left in place because no
  * clip was recorded for them: their marker cells are painted over with
  * `background`, and the plain card the overlay drew stays.
  * Returns the filter parts; the final video pad is labelled [v].
  */
-export function buildVideoGraph(format, segments, fps, { masks = [], background = '#07070a' } = {}) {
-  let crop = FILTERS[format]
-  if (!crop) throw new Error('[demowright] unknown format "' + format + '" (use landscape|square|vertical)')
-  if (masks.length) {
-    const box = 'drawbox=x=0:y=0:w=' + 2 * MARKER.cell + ':h=' + MARKER.cell + ':color=' + background.replace('#', '0x') + ':t=fill'
-    const paint = masks
-      .map((m) => box + ":enable='between(t," + m.start.toFixed(3) + ',' + m.end.toFixed(3) + ")'")
-      .join(',')
-    crop = crop.replace('[0:v]', '[0:v]' + paint + ',')
-  }
+export function buildVideoGraph(format, segments, fps, { masks = [], background = '#07070a', backdrop = null } = {}) {
+  if (!FILTERS[format]) throw new Error('[demowright] unknown format "' + format + '" (use landscape|square|vertical)')
+  const box = 'drawbox=x=0:y=0:w=' + 2 * MARKER.cell + ':h=' + MARKER.cell + ':color=' + background.replace('#', '0x') + ':t=fill'
+  const paint = masks.map((m) => box + ":enable='between(t," + m.start.toFixed(3) + ',' + m.end.toFixed(3) + ")'").join(',')
+  // With a backdrop the capture sits in a window over the background; without,
+  // it is cropped to the format.
+  const crop = backdrop
+    ? backdropChain(backdrop.geometry, backdrop.inputs, fps, paint)
+    : paint
+      ? FILTERS[format].replace('[0:v]', '[0:v]' + paint + ',')
+      : FILTERS[format]
   const segs = (segments || []).filter((sg) => sg.end > sg.start).sort((a, b) => a.start - b.start)
   if (!segs.length) return [crop]
 
@@ -93,7 +97,7 @@ export function buildVideoGraph(format, segments, fps, { masks = [], background 
   return parts
 }
 
-function runFfmpeg(args) {
+export function runFfmpeg(args) {
   return new Promise((resolve, reject) => {
     const proc = spawn(ffmpegPath, args, { stdio: ['ignore', 'ignore', 'pipe'] })
     let stderr = ''
@@ -273,7 +277,9 @@ export async function renderVideo(rawVideoPath, opts = {}) {
   const musicVolume = opts.musicVolume == null ? 0.18 : opts.musicVolume
   // Capture length caps the output (so looped music / late narration don't run
   // past the video) and positions the music tail-fade.
-  const durationSec = hasMusic || hasVoice ? await probeDurationSec(source) : null
+  // The backdrop loops forever, so with it the length must always be capped.
+  const hasBackdrop = !!(opts.backdropAssets && Object.keys(opts.backdropAssets).length)
+  const durationSec = hasMusic || hasVoice || hasBackdrop ? await probeDurationSec(source) : null
 
   // Scene stretches, moved onto the (post-timelapse) timeline like the cues.
   const onTimeline = (sc) => ({
@@ -300,7 +306,17 @@ export async function renderVideo(rawVideoPath, opts = {}) {
     for (const clip of clips) args.push('-i', clip.path)
     const segments = clips.map((clip, k) => ({ ...sceneRanges[k], input: sceneInput + k, offset: clip.offset }))
 
-    const parts = buildVideoGraph(format, segments, fps, { masks, background: opts.background })
+    // Backdrop inputs go after the scene clips: the looping background, then the
+    // three still images (single frames, which overlay repeats).
+    let backdrop = null
+    const assets = opts.backdropAssets && opts.backdropAssets[format]
+    if (assets) {
+      const at = sceneInput + clips.length
+      args.push('-stream_loop', '-1', '-i', assets.background, '-i', assets.chrome, '-i', assets.mask, '-i', assets.shadow)
+      backdrop = { geometry: assets.geometry, inputs: { bg: at, chrome: at + 1, mask: at + 2, shadow: at + 3 } }
+    }
+
+    const parts = buildVideoGraph(format, segments, fps, { masks, background: opts.background, backdrop })
     const audioLabel = buildAudioGraph(parts, {
       hasMusic,
       musicVolume,
@@ -323,7 +339,7 @@ export async function renderVideo(rawVideoPath, opts = {}) {
     // Cap to the capture length when known; otherwise fall back to -shortest so
     // infinitely-looped music can't run forever.
     if (durationSec) args.push('-t', durationSec.toFixed(3))
-    else if (hasMusic) args.push('-shortest')
+    else if (hasMusic || backdrop) args.push('-shortest')
     args.push(out)
 
     await runFfmpeg(args)

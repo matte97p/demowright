@@ -115,6 +115,7 @@ async function main() {
       onVoice: (n) => process.stdout.write('  · narrating ' + n + ' line(s)…\n'),
       onStep: (i, step) => process.stdout.write('  · ' + String(i + 1).padStart(2) + ' ' + step.type + '\n'),
       onScene: (format, k) => process.stdout.write('  · scene ' + (k + 1) + ' (' + format + ')\n'),
+      onBackdrop: (format) => process.stdout.write('  · backdrop (' + format + ')\n'),
     })
 
     console.log('✓ done:')

@@ -117,12 +117,23 @@ export type Step =
 
 export type Format = 'landscape' | 'square' | 'vertical'
 
+export interface Backdrop {
+  /** 'browser' draws an address bar; 'none' just the rounded window. */
+  frame?: 'browser' | 'none'
+  /** Share of the frame the window takes, 0.5 to 1 (default 0.86). */
+  scale?: number
+  /** Address bar text; defaults to the host of the demo url. */
+  url?: string
+}
+
 export interface Demo {
   name?: string
   /** The page the demo starts on. */
   url: string
   viewport?: Viewport
   theme?: Theme
+  /** Show the capture as a window over the animated background. */
+  backdrop?: boolean | Backdrop
   /** Background music track (path). */
   music?: string | null
   /** Music level, 0–1 (default 0.18). */
@@ -150,6 +161,8 @@ export interface RecordOptions {
   onVoice?: (lineCount: number) => void
   /** Called before each scene recording (one per scene per format). */
   onScene?: (format: Format, sceneIndex: number) => void
+  /** Called before the backdrop of each format is made. */
+  onBackdrop?: (format: Format) => void
 }
 
 export interface Output {
@@ -208,6 +221,20 @@ export function runDemo(
   scenes: SceneStep[]
 }>
 
+export interface BackdropAssets {
+  background: string
+  chrome: string
+  mask: string
+  shadow: string
+  geometry: { W: number; H: number; ww: number; wh: number; hb: number; total: number; x: number; y: number; radius: number }
+}
+
+export function recordBackdrop(
+  demo: Demo,
+  formats: Format[],
+  opts?: { workDir?: string; onBackdrop?: (format: Format) => void }
+): Promise<Partial<Record<Format, BackdropAssets>>>
+
 /** Find the scene covers in a capture, from its frames. */
 export function detectMarkerRuns(file: string, opts?: { maxGapSec?: number; minSec?: number }): Promise<MarkerRun[]>
 
@@ -236,6 +263,8 @@ export function renderVideo(
     sceneClips?: Partial<Record<Format, SceneClip[]>>
     /** Colour painted over the markers of covers rendered without clips. */
     background?: string
+    /** From recordBackdrop: per format, the background loop and the window images. */
+    backdropAssets?: Partial<Record<Format, BackdropAssets>>
   }
 ): Promise<Output[]>
 

@@ -9,18 +9,18 @@
 import { rm } from 'node:fs/promises'
 import path from 'node:path'
 import { normalizeDemo, defineDemo, estimateDurationMs, STEP_TYPES } from './steps.js'
-import { runDemo, recordScenes } from './runner.js'
+import { runDemo, recordScenes, recordBackdrop } from './runner.js'
 import { renderVideo } from './render.js'
 import { synthesizeNarration } from './voice.js'
 import { detectMarkerRuns, matchScenes } from './marker.js'
 
-export { defineDemo, normalizeDemo, runDemo, recordScenes, renderVideo, estimateDurationMs, STEP_TYPES }
+export { defineDemo, normalizeDemo, runDemo, recordScenes, recordBackdrop, renderVideo, estimateDurationMs, STEP_TYPES }
 export { detectMarkerRuns, matchScenes }
 
 /**
  * Capture a demo and render it to MP4(s).
  * @param {object} rawDemo  the demo definition ({ url, steps, ... })
- * @param {object} [opts]   { out, formats, music, workDir, keepRaw, onStep, onAuth, onVoice, onScene }
+ * @param {object} [opts]   { out, formats, music, workDir, keepRaw, onStep, onAuth, onVoice, onScene, onBackdrop }
  * @returns {Promise<{ outputs: Array<{format,path}>, demo: object }>}
  */
 export async function recordDemo(rawDemo, opts = {}) {
@@ -43,9 +43,10 @@ export async function recordDemo(rawDemo, opts = {}) {
   // lines can be muxed in at their timestamps) do not depend on each other.
   const voiceLines = demo.voice && narration.length
   if (voiceLines && opts.onVoice) opts.onVoice(narration.length)
-  const [sceneClips, voiceCues] = await Promise.all([
+  const [sceneClips, voiceCues, backdropAssets] = await Promise.all([
     recordScenes(demo, sceneRanges, formats, { workDir, onScene: opts.onScene }),
     voiceLines ? synthesizeNarration(narration, demo.voice, workDir) : [],
+    recordBackdrop(demo, formats, { workDir, onBackdrop: opts.onBackdrop }),
   ])
 
   const outputs = await renderVideo(rawVideoPath, {
@@ -58,6 +59,7 @@ export async function recordDemo(rawDemo, opts = {}) {
     narration: voiceCues,
     scenes: sceneRanges,
     sceneClips,
+    backdropAssets,
     background: demo.theme.background,
     workDir,
   })

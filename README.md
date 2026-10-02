@@ -111,6 +111,8 @@ One capture, three crops, so you don't record three times (scenes are the except
 - `square` — 1080×1080, center-cropped, for the LinkedIn / Instagram feed
 - `vertical` — 1080×1920, the landscape centered over a blurred fill, for Reels / Shorts
 
+With a [backdrop](#backdrop-optional), every format shows the whole capture as a window over the animated background instead.
+
 ## Motion scenes
 
 A demo usually needs a little around the recording: an opening title, a beat that names what comes next, a closing card. `scene` steps are those, animated (words revealed from blur, cards sliding in, a slowly drifting background) and placed anywhere in `steps`.
@@ -138,7 +140,25 @@ steps: [
 - **Without the clips** (calling `runDemo` and `renderVideo` yourself), a scene renders as a plain card with its title, and its marker is painted over.
 - **An opening scene also hides the page load**: it replaces the capture from its very first frame, so the video starts on the title instead of a white page.
 
-Each scene costs one short extra recording per format, in real time; formats record side by side, and while they do the voiceover is synthesized.
+Each scene costs one short extra recording per format, in real time; formats record side by side, and while they do the voiceover is synthesized. `node scripts/frame-check.mjs` renders `examples/scenes.config.js` and reports how many frames those real-time recordings dropped on your machine; CI runs it on every pull request.
+
+## Backdrop (optional)
+
+`backdrop: true` shows the capture as a browser window over the same animated background the scenes use, instead of filling the frame:
+
+```js
+export default defineDemo({
+  url: 'https://app.example.com',
+  backdrop: { frame: 'browser', scale: 0.86, url: 'app.example.com' },
+  steps: [/* … */],
+})
+```
+
+- `frame`: `browser` (an address bar with the three dots) or `none` (just the rounded window).
+- `scale`: how much of the frame the window takes, in both directions, from 0.5 to 1 (default 0.86).
+- `url`: the text in the address bar, by default the host of the demo `url` (nothing for a `file://` page).
+
+It changes the social formats too: with a backdrop, `square` and `vertical` show the whole window over the background instead of a center crop or a blurred copy. The background is a 12-second loop recorded once per format, so a long demo costs no more than a short one.
 
 ## Voiceover (optional)
 
