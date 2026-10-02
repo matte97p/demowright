@@ -33,7 +33,12 @@ function printPlan(rawDemo) {
   const narrates = (s) => s.say != null || (d.voice && d.voice.fromCaptions && s.type === 'caption')
   d.steps.forEach((s, i) => {
     const detail = narrates(s) ? '🔊 ' : ''
-    const what = s.text != null ? JSON.stringify(s.text) : s.selector || s.url || s.key || ''
+    const what =
+      s.text != null
+        ? JSON.stringify(s.text)
+        : s.title != null
+          ? s.preset + ' ' + JSON.stringify(s.title)
+          : s.selector || s.url || s.key || ''
     console.log('  ' + String(i + 1).padStart(3) + '  ' + s.type.padEnd(12) + ' ' + detail + what)
   })
 }
@@ -109,6 +114,7 @@ async function main() {
       onAuth: () => process.stdout.write('  · logging in…\n'),
       onVoice: (n) => process.stdout.write('  · narrating ' + n + ' line(s)…\n'),
       onStep: (i, step) => process.stdout.write('  · ' + String(i + 1).padStart(2) + ' ' + step.type + '\n'),
+      onScene: (format, k) => process.stdout.write('  · scene ' + (k + 1) + ' (' + format + ')\n'),
     })
 
     console.log('✓ done:')

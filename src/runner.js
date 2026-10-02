@@ -6,8 +6,12 @@ import { chromium } from 'playwright'
 import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 import { buildInitScript } from './overlay.js'
+import { buildSceneHtml, FORMAT_SIZES } from './scenes.js'
 
 const sleep = (page, ms) => page.waitForTimeout(Math.max(0, ms | 0))
+
+/** How early a scene replaces the capture, to cover the clock-to-video drift. */
+const SCENE_LEAD_SEC = 0.12
 
 /** Real on-screen center of a selector (viewport coords), for genuine hover. */
 async function centerOf(page, selector) {
@@ -26,7 +30,7 @@ async function dw(page, fn, ...args) {
 /** type → async executor. Each receives (page, step, demo). */
 const EXECUTORS = {
   async caption(page, step) {
-    await dw(page, 'caption', step.text, step.hold ? 0 : step.duration)
+    await dw(page, 'caption', step.text, step.hold ? 0 : step.duration, { style: step.style, accent: step.accent })
     if (!step.hold) await sleep(page, step.duration)
   },
 
@@ -146,10 +150,13 @@ const EXECUTORS = {
     }
   },
 
-  async endcard(page, step) {
-    await dw(page, 'captionHide')
-    await dw(page, 'endcard', step.title, step.subtitle || '', step.duration)
+  // The page is covered while the scene runs; the render stage swaps this stretch
+  // for the scene recorded at each format's size (see recordScenes).
+  async scene(page, step, demo, { last }) {
+    await dw(page, 'highlightHide')
+    await dw(page, 'cover', true)
     await sleep(page, step.duration)
+    if (!last) await dw(page, 'cover', false)
   },
 }
 
@@ -214,17 +221,21 @@ export async function runDemo(demo, opts = {}) {
     ...(demo.locale ? { locale: demo.locale } : {}),
     ...(storageState ? { storageState } : {}),
   })
-  // Video recording starts when the context is created; measure timelapse
-  // ranges as second-offsets from this moment so they line up with the capture.
-  const recordStart = Date.now()
+  // The video's first frame is the new page's, not the context's: measured, the
+  // context-based clock ran 0.1-0.25 s ahead of the capture, which is enough to
+  // flash a frame of the scene cover. Every offset (timelapse, narration, scene)
+  // is a second-offset from this moment.
   const page = await context.newPage()
+  const recordStart = Date.now()
   await page.addInitScript(buildInitScript(demo.theme))
   if (demo.init) await page.addInitScript(demo.init)
 
   const log = opts.onStep || (() => {})
   const timelapses = [] // { start, end, factor } in seconds — dead waits to speed up
+  const scenes = [] // { step, start, end, lead, toEnd } in seconds: stretches replaced by a scene
   const narration = [] // { text, atSec } — voiceover lines, placed at step start
   let video
+  let recordEnd
 
   try {
     await page.goto(demo.url, { waitUntil: 'load' })
@@ -251,13 +262,26 @@ export async function runDemo(demo, opts = {}) {
       // A `wait` may be marked `timelapse: N` to speed that recorded span up N×
       // in the final video (e.g. waiting out a multi-minute audit).
       const tlStart = step.type === 'wait' && step.timelapse > 1 ? (Date.now() - recordStart) / 1000 : null
+      const last = i === demo.steps.length - 1
+      // An opening scene also replaces the page load before it, so the video
+      // starts on the scene instead of on the white frames of a loading page.
+      const sceneStart = step.type === 'scene' ? (i === 0 ? 0 : (Date.now() - recordStart) / 1000) : null
       try {
-        await exec(page, step, demo)
+        await exec(page, step, demo, { last })
       } catch (err) {
         throw new Error('step ' + i + ' (' + step.type + ') failed: ' + err.message)
       }
       if (tlStart != null) {
         timelapses.push({ start: tlStart, end: (Date.now() - recordStart) / 1000, factor: step.timelapse })
+      }
+      if (sceneStart != null) {
+        // The capture still runs ~0.1 s ahead of this clock, so the replacement
+        // starts a little early (`lead`), where the scene clip shows its still
+        // background, and no frame of the cover reaches the video.
+        const lead = sceneStart > 0 ? Math.min(SCENE_LEAD_SEC, sceneStart) : 0
+        // A closing scene runs to the end of the capture (end: null).
+        const end = last ? null : (Date.now() - recordStart) / 1000
+        scenes.push({ step, start: sceneStart - lead, end, lead, toEnd: last })
       }
     }
   } finally {
@@ -265,11 +289,63 @@ export async function runDemo(demo, opts = {}) {
     // `return` here — a return inside finally swallows a thrown step error and
     // makes a failed run look successful. Capture the handle and resolve after.
     video = page.video()
+    recordEnd = Date.now()
     await context.close() // flushes the video file
     await browser.close()
   }
   // Only reached when the step loop completed without throwing.
   if (!video) throw new Error('[demowright] no video was recorded')
   const rawVideoPath = await video.path()
-  return { rawVideoPath, workDir, timelapses, narration }
+  const captureSec = (recordEnd - recordStart) / 1000
+  for (const sc of scenes) if (sc.end == null) sc.end = captureSec
+  return { rawVideoPath, workDir, timelapses, narration, scenes }
+}
+
+/**
+ * Record every scene once per format, at that format's output size. Returns, per
+ * format, one { path, offset, length } per scene (seconds): `offset` is where the
+ * clip is used from, after the frames of the page loading.
+ */
+export async function recordScenes(demo, scenes, formats, opts = {}) {
+  const out = {}
+  if (!scenes.length) return out
+  const dir = path.join(opts.workDir || path.join(process.cwd(), '.demowright-tmp'), 'scenes')
+  await mkdir(dir, { recursive: true })
+  const browser = await chromium.launch({ headless: true })
+  try {
+    for (const format of formats) {
+      const size = FORMAT_SIZES[format]
+      if (!size) throw new Error('[demowright] unknown format "' + format + '" (use landscape|square|vertical)')
+      out[format] = []
+      for (let k = 0; k < scenes.length; k++) {
+        const sc = scenes[k]
+        const length = Math.max(0.1, sc.end - sc.start)
+        const lead = sc.lead || 0
+        if (opts.onScene) opts.onScene(format, k)
+        const context = await browser.newContext({
+          viewport: size,
+          deviceScaleFactor: 1,
+          recordVideo: { dir, size },
+          reducedMotion: 'no-preference',
+        })
+        const page = await context.newPage()
+        const start = Date.now()
+        const last = sc.step === demo.steps[demo.steps.length - 1]
+        // The animation runs for the scene's own time; the lead before it is the
+        // still background, taken from the frames recorded before `go`.
+        await page.setContent(buildSceneHtml(sc.step, demo.theme, (length - lead) * 1000, last), { waitUntil: 'load' })
+        await page.evaluate(() => document.fonts.ready)
+        await sleep(page, 150)
+        const offset = Math.max(0, (Date.now() - start) / 1000 - lead)
+        await page.evaluate(() => document.body.classList.add('go'))
+        await sleep(page, length * 1000 + 250)
+        const video = page.video()
+        await context.close()
+        out[format].push({ path: await video.path(), offset, length })
+      }
+    }
+  } finally {
+    await browser.close()
+  }
+  return out
 }

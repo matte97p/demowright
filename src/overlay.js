@@ -5,9 +5,9 @@
  * Playwright's `addInitScript`, so it re-installs itself on every navigation.
  * It exposes `window.__dw`, a small API the runner drives over `page.evaluate`.
  *
- * The whole point: the polish (captions, a smooth synthetic cursor, zoom, an end
- * card) is part of the DOM, so it ends up *inside* the recorded video — no
- * post-production compositing needed. The browser never shows the real OS cursor
+ * The whole point: the polish (captions, a smooth synthetic cursor, zoom) is part
+ * of the DOM, so it ends up *inside* the recorded video, with no post-production
+ * compositing needed. The browser never shows the real OS cursor
  * in a headless recording, which is exactly why we draw our own.
  *
  * Coordinate model:
@@ -24,13 +24,14 @@ export function overlayRuntime(theme) {
     (theme && theme.font) ||
     'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif'
   const EASE = 'cubic-bezier(0.22, 0.61, 0.36, 1)'
+  const BG = (theme && theme.background) || '#07070a'
 
   let root = null
   let cursorEl = null
   let clickRingEl = null
   let captionEl = null
   let ringEl = null
-  let cardEl = null
+  let coverEl = null
   let captionTimer = null
 
   function ensureRoot() {
@@ -164,10 +165,47 @@ export function overlayRuntime(theme) {
     clickRingEl.style.opacity = '0'
   }
 
-  api.caption = function (text, ms) {
+  // Strip the punctuation around a word, so "click." matches the accent "click".
+  function bare(w) {
+    return w.toLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '')
+  }
+
+  // `style: 'words'` reveals the caption one word at a time, blurred to sharp,
+  // with the words listed in `accent` in the theme colour.
+  function fillWords(text, accent) {
+    const acc = new Set(String(accent || '').split(/\s+/).map(bare).filter(Boolean))
+    captionEl.textContent = ''
+    String(text)
+      .split(/\s+/)
+      .filter(Boolean)
+      .forEach(function (w, i) {
+        const span = document.createElement('span')
+        span.textContent = w
+        Object.assign(span.style, {
+          display: 'inline-block',
+          marginRight: '0.28em',
+          opacity: '0',
+          filter: 'blur(8px)',
+          transform: 'translateY(0.35em)',
+          transition: 'opacity 420ms ' + EASE + ', filter 420ms ' + EASE + ', transform 420ms ' + EASE,
+          transitionDelay: 120 + i * 80 + 'ms',
+          color: acc.has(bare(w)) ? ACCENT : '',
+        })
+        captionEl.appendChild(span)
+      })
+    void captionEl.offsetWidth
+    for (const span of captionEl.children) {
+      span.style.opacity = '1'
+      span.style.filter = 'blur(0)'
+      span.style.transform = 'none'
+    }
+  }
+
+  api.caption = function (text, ms, opts) {
     ensureRoot()
     if (captionTimer) clearTimeout(captionTimer)
-    captionEl.textContent = text
+    if (opts && opts.style === 'words') fillWords(text, opts.accent)
+    else captionEl.textContent = text
     captionEl.style.opacity = '1'
     captionEl.style.transform = 'translateX(-50%) translateY(0)'
     if (ms && ms > 0) {
@@ -217,39 +255,27 @@ export function overlayRuntime(theme) {
     b.style.transform = 'none'
   }
 
-  api.endcard = function (title, subtitle, ms) {
+  // Full-screen cover held while a motion scene plays. The render stage replaces
+  // this stretch of the capture with the scene recorded at each format's size, so
+  // what matters is only that the page underneath is not visible.
+  api.cover = function (on) {
     ensureRoot()
-    if (!cardEl) {
-      cardEl = document.createElement('div')
-      Object.assign(cardEl.style, {
+    if (!coverEl) {
+      coverEl = document.createElement('div')
+      Object.assign(coverEl.style, {
         position: 'absolute',
         left: '0',
         top: '0',
         width: '100%',
         height: '100%',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: '14px',
-        background: 'radial-gradient(120% 120% at 50% 30%, #1b1b22 0%, #0b0b0e 70%)',
-        color: '#fff',
+        background: BG,
         opacity: '0',
-        transition: 'opacity 520ms ease',
       })
-      const t = document.createElement('div')
-      t.className = '__dw-card-title'
-      Object.assign(t.style, { fontSize: '56px', fontWeight: '800', letterSpacing: '-0.5px' })
-      const s = document.createElement('div')
-      s.className = '__dw-card-sub'
-      Object.assign(s.style, { fontSize: '24px', fontWeight: '500', color: ACCENT })
-      cardEl.append(t, s)
-      root.appendChild(cardEl)
+      root.appendChild(coverEl)
     }
-    cardEl.querySelector('.__dw-card-title').textContent = title || ''
-    cardEl.querySelector('.__dw-card-sub').textContent = subtitle || ''
-    void cardEl.offsetWidth
-    cardEl.style.opacity = '1'
+    coverEl.style.opacity = on ? '1' : '0'
+    cursorEl.style.opacity = on ? '0' : '1'
+    if (on) api.captionHide()
     return true
   }
 

@@ -7,6 +7,22 @@ All notable changes to this project are documented here. The format is based on
 ## [Unreleased]
 
 ### Added
+- Motion scenes: a `scene` step for full-screen animated cards, with three presets
+  (`title`, `list`, `outro`). Each scene is recorded at the size of every requested
+  format and swapped in at render time for a stretch of the same length, so titles
+  are never cropped and narration does not move. An opening scene also replaces
+  the page load at the start of the video.
+- `caption.style: 'words'` reveals a caption word by word, with `accent` words in
+  the theme colour.
+- `theme.background`, the base colour of scenes.
+
+### Changed
+- `endcard` is now shorthand for a `scene` with `preset: 'outro'`: same fields,
+  animated, and recorded per format instead of cropped.
+- Step timestamps (timelapse ranges, narration cues) are measured from the moment
+  the recorded page exists rather than from the browser context, which put them
+  0.1 to 0.25 seconds ahead of the video.
+
 - Optional voiceover. Set a `voice` block (`openai`, `elevenlabs`, a `synthesize`
   function, or a bare function) and a `say` line on steps; each line is synthesized,
   placed at the moment its step runs, and the music is ducked underneath it.

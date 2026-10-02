@@ -6,6 +6,8 @@
  * so it can be unit-tested without a browser — the executors live in runner.js.
  */
 
+import { SCENE_PRESETS } from './scenes.js'
+
 /** Default timing (ms) per step kind. Tuned to read well at normal playback. */
 const DEFAULTS = {
   caption: { duration: 2600 },
@@ -18,8 +20,11 @@ const DEFAULTS = {
   zoomReset: { duration: 600 },
   scroll: { duration: 600 },
   endcard: { duration: 2800 },
+  scene: { preset: 'title', duration: 2800 },
   wait: { timeout: 30000 },
 }
+
+const CAPTION_STYLES = ['bar', 'words']
 
 /** Every supported step type and the fields it requires. */
 export const STEP_TYPES = {
@@ -38,6 +43,7 @@ export const STEP_TYPES = {
   scroll: { required: [] }, // selector OR y
   wait: { required: [] }, // duration OR selector
   endcard: { required: ['title'] },
+  scene: { required: ['title'] },
 }
 
 function fail(msg) {
@@ -76,6 +82,20 @@ export function normalizeDemo(demo) {
     }
     if (raw.type === 'wait' && raw.duration == null && raw.selector == null) {
       fail('step ' + i + ' (wait) needs either "duration" (ms) or "selector"')
+    }
+    if (raw.type === 'caption' && raw.style != null && !CAPTION_STYLES.includes(raw.style)) {
+      fail('step ' + i + ' (caption) has unknown style "' + raw.style + '". Valid: ' + CAPTION_STYLES.join(', '))
+    }
+    // The end card is the outro scene: same fields, recorded per format.
+    if (raw.type === 'endcard') return { ...DEFAULTS.scene, ...raw, type: 'scene', preset: 'outro' }
+    if (raw.type === 'scene') {
+      const preset = raw.preset || DEFAULTS.scene.preset
+      if (!SCENE_PRESETS.includes(preset)) {
+        fail('step ' + i + ' (scene) has unknown preset "' + preset + '". Valid: ' + SCENE_PRESETS.join(', '))
+      }
+      if (preset === 'list' && (!Array.isArray(raw.items) || !raw.items.length)) {
+        fail('step ' + i + ' (scene, list) needs a non-empty "items" array')
+      }
     }
     return { ...DEFAULTS[raw.type], ...raw }
   })
@@ -161,7 +181,7 @@ export function estimateDurationMs(demo) {
     else if (s.type === 'wait') total += s.duration || 600
     else if (s.type === 'click' || s.type === 'move') total += (s.duration || 0) + 200
     else if (s.type === 'zoom' || s.type === 'zoomReset' || s.type === 'scroll') total += s.duration || 0
-    else if (s.type === 'endcard') total += s.duration || 0
+    else if (s.type === 'endcard' || s.type === 'scene') total += s.duration || 0
     else total += 250
   }
   return total

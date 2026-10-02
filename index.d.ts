@@ -11,7 +11,13 @@ export interface Theme {
   accent?: string
   /** CSS font-family stack for overlay text. */
   font?: string
+  /** Base colour of motion scenes (default #07070a). */
+  background?: string
 }
+
+export type ScenePreset = 'title' | 'list' | 'outro'
+
+export type SceneItem = string | { label: string; hint?: string }
 
 export interface AuthField {
   selector: string
@@ -63,7 +69,16 @@ interface Narratable {
 }
 
 export type Step =
-  | (Narratable & { type: 'caption'; text: string; duration?: number; hold?: boolean })
+  | (Narratable & {
+      type: 'caption'
+      text: string
+      duration?: number
+      hold?: boolean
+      /** 'words' reveals the caption word by word. */
+      style?: 'bar' | 'words'
+      /** Words of `text` drawn in the theme accent. */
+      accent?: string
+    })
   | (Narratable & { type: 'captionHide' })
   | (Narratable & { type: 'goto'; url: string })
   | (Narratable & { type: 'move'; selector?: string; x?: number; y?: number; duration?: number })
@@ -86,6 +101,18 @@ export type Step =
   | (Narratable & { type: 'zoomReset'; duration?: number })
   | (Narratable & { type: 'scroll'; selector?: string; y?: number; duration?: number })
   | (Narratable & { type: 'wait'; duration?: number; selector?: string; timeout?: number; timelapse?: number })
+  | (Narratable & {
+      type: 'scene'
+      title: string
+      preset?: ScenePreset
+      subtitle?: string
+      /** Words of `title` drawn in the theme accent. */
+      accent?: string
+      /** Required by the 'list' preset. */
+      items?: SceneItem[]
+      duration?: number
+    })
+  /** Shorthand for a scene with preset 'outro'. */
   | (Narratable & { type: 'endcard'; title: string; subtitle?: string; duration?: number })
 
 export type Format = 'landscape' | 'square' | 'vertical'
@@ -121,6 +148,8 @@ export interface RecordOptions {
   onStep?: (i: number, step: Step) => void
   onAuth?: () => void
   onVoice?: (lineCount: number) => void
+  /** Called before each scene recording (one per scene per format). */
+  onScene?: (format: Format, sceneIndex: number) => void
 }
 
 export interface Output {
@@ -132,6 +161,24 @@ export interface Timelapse {
   start: number
   end: number
   factor: number
+}
+
+/** A stretch of the capture replaced by a scene, in seconds. */
+export interface SceneRange {
+  step: Step
+  start: number
+  end: number
+  /** How much earlier than its step the replacement starts. */
+  lead: number
+  /** The closing scene runs to the end of the capture. */
+  toEnd: boolean
+}
+
+/** One recorded scene clip: used from `offset`, for `length` seconds. */
+export interface SceneClip {
+  path: string
+  offset: number
+  length: number
 }
 
 export function defineDemo(demo: Demo): Demo
@@ -146,7 +193,15 @@ export function runDemo(
   workDir: string
   timelapses: Timelapse[]
   narration: Array<{ text: string; atSec: number }>
+  scenes: SceneRange[]
 }>
+
+export function recordScenes(
+  demo: Demo,
+  scenes: SceneRange[],
+  formats: Format[],
+  opts?: { workDir?: string; onScene?: (format: Format, sceneIndex: number) => void }
+): Promise<Partial<Record<Format, SceneClip[]>>>
 
 export function renderVideo(
   rawVideoPath: string,
@@ -159,6 +214,8 @@ export function renderVideo(
     workDir?: string
     timelapses?: Timelapse[]
     narration?: Array<{ path: string; atSec: number }>
+    scenes?: SceneRange[]
+    sceneClips?: Partial<Record<Format, SceneClip[]>>
   }
 ): Promise<Output[]>
 

@@ -136,3 +136,44 @@ test('estimateDurationMs grows with content and is roughly additive', () => {
   assert.ok(big > small)
   assert.ok(small >= 700, 'includes the intro settle')
 })
+
+test('a scene defaults to the title preset', () => {
+  const d = normalizeDemo({ url: 'x', steps: [{ type: 'scene', title: 'Hi' }] })
+  assert.equal(d.steps[0].preset, 'title')
+  assert.equal(d.steps[0].duration, 2800)
+})
+
+test('a scene with an unknown preset is rejected', () => {
+  assert.throws(
+    () => normalizeDemo({ url: 'x', steps: [{ type: 'scene', title: 'Hi', preset: 'confetti' }] }),
+    /unknown preset "confetti"/
+  )
+})
+
+test('a list scene needs items', () => {
+  assert.throws(
+    () => normalizeDemo({ url: 'x', steps: [{ type: 'scene', title: 'Hi', preset: 'list' }] }),
+    /needs a non-empty "items" array/
+  )
+})
+
+test('the end card becomes the outro scene, keeping its fields', () => {
+  const d = normalizeDemo({ url: 'x', steps: [{ type: 'endcard', title: 'App', subtitle: 'app.com', duration: 2000 }] })
+  assert.deepEqual(
+    { type: d.steps[0].type, preset: d.steps[0].preset, title: d.steps[0].title, subtitle: d.steps[0].subtitle, duration: d.steps[0].duration },
+    { type: 'scene', preset: 'outro', title: 'App', subtitle: 'app.com', duration: 2000 }
+  )
+})
+
+test('a caption style must be one of the known ones', () => {
+  assert.throws(
+    () => normalizeDemo({ url: 'x', steps: [{ type: 'caption', text: 'hi', style: 'neon' }] }),
+    /unknown style "neon"/
+  )
+  assert.doesNotThrow(() => normalizeDemo({ url: 'x', steps: [{ type: 'caption', text: 'hi', style: 'words' }] }))
+})
+
+test('scenes count toward the estimated length', () => {
+  const d = normalizeDemo({ url: 'x', steps: [{ type: 'scene', title: 'Hi', duration: 3000 }] })
+  assert.equal(estimateDurationMs(d), 3700)
+})

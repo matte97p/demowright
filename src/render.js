@@ -11,6 +11,7 @@ import { spawn } from 'node:child_process'
 import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 import ffmpegPath from 'ffmpeg-static'
+import { FORMAT_SIZES } from './scenes.js'
 
 /** Video-filter graph per format. `[v]` is the labelled final video pad. */
 const FILTERS = {
@@ -22,6 +23,63 @@ const FILTERS = {
     '[bg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=24:4[bgb];' +
     '[fg]scale=1080:-2[fgs];' +
     '[bgb][fgs]overlay=(W-w)/2:(H-h)/2,setsar=1[v]',
+}
+
+/**
+ * Video graph for one format, with the scene stretches of the capture replaced by
+ * the scene clips recorded at that format's size. Pure, so it can be tested.
+ *
+ * `segments` are { start, end, input, offset, toEnd? } in seconds on the source
+ * timeline (`toEnd` marks a closing scene that runs to the end of the capture):
+ * `input` is the ffmpeg input index of the scene clip, `offset` where its
+ * animation starts. The replaced stretch and the clip have the same length, so
+ * the timeline (and every narration cue placed on it) does not move.
+ * Returns the filter parts; the final video pad is labelled [v].
+ */
+export function buildVideoGraph(format, segments, fps) {
+  const crop = FILTERS[format]
+  if (!crop) throw new Error('[demowright] unknown format "' + format + '" (use landscape|square|vertical)')
+  const segs = (segments || []).filter((sg) => sg.end > sg.start).sort((a, b) => a.start - b.start)
+  if (!segs.length) return [crop]
+
+  const { width, height } = FORMAT_SIZES[format]
+  const minPiece = 1 / fps
+  const pieces = [] // { kind: 'capture', start, end? } | { kind: 'scene', seg }
+  let cursor = 0
+  for (const sg of segs) {
+    if (sg.start - cursor >= minPiece) pieces.push({ kind: 'capture', start: cursor, end: sg.start })
+    pieces.push({ kind: 'scene', seg: sg })
+    cursor = Math.max(cursor, sg.end)
+  }
+  // A closing scene runs to the end of the capture, so there is no tail after it.
+  if (!segs[segs.length - 1].toEnd) pieces.push({ kind: 'capture', start: cursor, end: null })
+
+  const captures = pieces.filter((pc) => pc.kind === 'capture')
+  const parts = []
+  if (captures.length) {
+    const split = captures.length > 1 ? ',split=' + captures.length : ''
+    const outs = captures.map((_, j) => '[c' + j + ']').join('')
+    parts.push(crop.replace(/\[v\]$/, ',fps=' + fps + ',format=yuv420p' + split + outs))
+  }
+  const labels = []
+  let c = 0
+  pieces.forEach((pc, j) => {
+    if (pc.kind === 'capture') {
+      const range = 'start=' + pc.start.toFixed(3) + (pc.end == null ? '' : ':end=' + pc.end.toFixed(3))
+      parts.push('[c' + c + ']trim=' + range + ',setpts=PTS-STARTPTS[p' + j + ']')
+      c++
+    } else {
+      const sg = pc.seg
+      parts.push(
+        '[' + sg.input + ':v]trim=start=' + sg.offset.toFixed(3) + ':duration=' + (sg.end - sg.start).toFixed(3) +
+          ',setpts=PTS-STARTPTS,scale=' + width + ':' + height + ':force_original_aspect_ratio=increase,crop=' +
+          width + ':' + height + ',fps=' + fps + ',setsar=1,format=yuv420p[p' + j + ']'
+      )
+    }
+    labels.push('[p' + j + ']')
+  })
+  parts.push(labels.join('') + 'concat=n=' + labels.length + ':v=1:a=0[v]')
+  return parts
 }
 
 function runFfmpeg(args) {
@@ -206,17 +264,28 @@ export async function renderVideo(rawVideoPath, opts = {}) {
   // past the video) and positions the music tail-fade.
   const durationSec = hasMusic || hasVoice ? await probeDurationSec(source) : null
 
+  // Scene stretches, moved onto the (post-timelapse) timeline like the cues.
+  const sceneRanges = (opts.scenes || []).map((sc) => ({
+    start: remapTime(sc.start, opts.timelapses),
+    end: remapTime(sc.end, opts.timelapses),
+    toEnd: !!sc.toEnd,
+  }))
+
   const results = []
   for (const format of formats) {
-    const vfilter = FILTERS[format]
-    if (!vfilter) throw new Error('[demowright] unknown format "' + format + '" (use landscape|square|vertical)')
     const out = outPathFor(base, format, formats)
 
     const args = ['-y', '-loglevel', 'error', '-i', source]
     if (hasMusic) args.push('-stream_loop', '-1', '-i', opts.music)
     for (const c of cues) args.push('-i', c.path)
 
-    const parts = [vfilter]
+    // Scene clips go last, after music and narration, so the audio indices hold.
+    const clips = (opts.sceneClips && opts.sceneClips[format]) || []
+    const sceneInput = 1 + (hasMusic ? 1 : 0) + cues.length
+    for (const clip of clips) args.push('-i', clip.path)
+    const segments = clips.map((clip, k) => ({ ...sceneRanges[k], input: sceneInput + k, offset: clip.offset }))
+
+    const parts = buildVideoGraph(format, segments, fps)
     const audioLabel = buildAudioGraph(parts, {
       hasMusic,
       musicVolume,
