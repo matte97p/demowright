@@ -196,7 +196,7 @@ The overlay attaches itself to `<html>` rather than `<body>`, so the zoom transf
 
 - Node ≥ 20
 - Chromium, via `npx playwright install chromium` (headless — runs fine on a server / in CI with no display)
-- ffmpeg is bundled (`ffmpeg-static`); nothing to install on the system
+- ffmpeg is bundled (`ffmpeg-static`), nothing to install on the system. With npm 12, which blocks install scripts until they are approved, run `npm install-scripts approve ffmpeg-static` and reinstall, or point `DEMOWRIGHT_FFMPEG` at an ffmpeg (an `ffmpeg` on the PATH is used too)
 
 ## License
 

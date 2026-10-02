@@ -11,7 +11,7 @@
  * frame without it is where the scene clip is used from.
  */
 import { spawn } from 'node:child_process'
-import ffmpegPath from 'ffmpeg-static'
+import { ffmpegBin } from './ffmpeg.js'
 
 export const MARKER = { cell: 12, red: '#ff0000', blue: '#0000ff' }
 
@@ -103,7 +103,7 @@ export function detectMarkerRuns(file, { maxSec, ...runOpts } = {}) {
   const limit = maxSec ? ['-t', String(maxSec)] : []
   return new Promise((resolve, reject) => {
     const args = ['-hide_banner', '-loglevel', 'info', ...limit, '-i', file, '-vf', vf, '-fps_mode', 'passthrough', '-f', 'rawvideo', '-']
-    const proc = spawn(ffmpegPath, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    const proc = spawn(ffmpegBin(), args, { stdio: ['ignore', 'pipe', 'pipe'] })
     const markers = []
     const times = []
     let pending = Buffer.alloc(0)

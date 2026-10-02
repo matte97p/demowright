@@ -10,7 +10,7 @@
 import { spawn } from 'node:child_process'
 import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
-import ffmpegPath from 'ffmpeg-static'
+import { ffmpegBin } from './ffmpeg.js'
 import { FORMAT_SIZES, assertFormats } from './scenes.js'
 import { MARKER, detectMarkerRuns } from './marker.js'
 import { backdropChain } from './backdrop.js'
@@ -123,7 +123,7 @@ export function buildVideoGraph(format, segments, fps, { masks = [], background,
 export function runFfmpeg(args, signal) {
   return new Promise((resolve, reject) => {
     if (signal && signal.aborted) return reject(signal.reason || new Error('[demowright] stopped'))
-    const proc = spawn(ffmpegPath, args, { stdio: ['ignore', 'ignore', 'pipe'] })
+    const proc = spawn(ffmpegBin(), args, { stdio: ['ignore', 'ignore', 'pipe'] })
     const kill = () => proc.kill('SIGKILL')
     if (signal) signal.addEventListener('abort', kill, { once: true })
     proc.on('close', () => signal && signal.removeEventListener('abort', kill))
@@ -141,13 +141,13 @@ export function runFfmpeg(args, signal) {
 }
 
 /**
- * Read a clip's duration (seconds) by parsing ffmpeg's own banner — ffmpeg-static
- * ships no ffprobe. Resolves null if it can't be determined (callers degrade
+ * Read a clip's duration (seconds) by parsing ffmpeg's own banner (ffmpeg-static
+ * ships no ffprobe). Resolves null if it can't be determined (callers degrade
  * gracefully: the music tail-fade is skipped, capture length still governs).
  */
 function probeDurationSec(file) {
   return new Promise((resolve) => {
-    const proc = spawn(ffmpegPath, ['-i', file], { stdio: ['ignore', 'ignore', 'pipe'] })
+    const proc = spawn(ffmpegBin(), ['-i', file], { stdio: ['ignore', 'ignore', 'pipe'] })
     let s = ''
     proc.stderr.on('data', (d) => {
       s += d.toString()

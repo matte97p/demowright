@@ -45,6 +45,10 @@ All notable changes to this project are documented here. The format is based on
   0.1 to 0.25 seconds ahead of the video.
 - Scene clips, the backdrop and the voiceover are made side by side, as many
   recordings at once as the machine has cores for.
+- ffmpeg is looked for in `DEMOWRIGHT_FFMPEG`, then in ffmpeg-static, then on
+  the PATH. npm 12 blocks install scripts until they are approved, which leaves
+  ffmpeg-static without its binary; with no ffmpeg anywhere the error now says
+  how to get one (`npm install-scripts approve ffmpeg-static`).
 - A scene must last at least 600 ms, and an unknown format is rejected by
   `normalizeDemo`, before anything is recorded.
 - `runDemo`, `recordScenes` and `recordBackdrop` accept a raw demo and normalize

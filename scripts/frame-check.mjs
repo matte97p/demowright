@@ -18,7 +18,7 @@ import { spawn } from 'node:child_process'
 import { appendFile, readdir, rm } from 'node:fs/promises'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import ffmpegPath from 'ffmpeg-static'
+import { ffmpegBin } from '../src/ffmpeg.js'
 import { recordDemo, detectMarkerRuns } from '../src/index.js'
 
 const args = process.argv.slice(2)
@@ -33,7 +33,7 @@ const configPath = args.find((a, i) => !a.startsWith('--') && (maxIdx < 0 || i !
 /** Per-frame hashes of `file` from `fromSec` on. */
 function frameHashes(file, fromSec) {
   return new Promise((resolve, reject) => {
-    const proc = spawn(ffmpegPath, ['-v', 'error', '-ss', fromSec.toFixed(3), '-i', file, '-f', 'framemd5', '-'], {
+    const proc = spawn(ffmpegBin(), ['-v', 'error', '-ss', fromSec.toFixed(3), '-i', file, '-f', 'framemd5', '-'], {
       stdio: ['ignore', 'pipe', 'inherit'],
     })
     let out = ''
